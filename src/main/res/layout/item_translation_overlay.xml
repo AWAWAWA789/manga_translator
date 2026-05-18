@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<TextView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/tv_translated"
+    android:layout_width="wrap_content"
+    android:layout_height="wrap_content"
+    android:background="#E6FFFFFF"
+    android:padding="6dp"
+    android:textSize="13sp"
+    android:textColor="#333333"
+    android:textStyle="bold"
+    android:lineSpacingMultiplier="1.2"
+    android:elevation="4dp"
+    android:maxWidth="250dp" />
