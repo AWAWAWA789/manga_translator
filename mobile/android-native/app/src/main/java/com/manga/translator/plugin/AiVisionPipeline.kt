@@ -1,0 +1,250 @@
+package com.manga.translator.plugin
+
+import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.Rect
+import android.util.Base64
+import android.util.Log
+import com.google.gson.Gson
+import com.google.gson.annotations.SerializedName
+import com.manga.translator.model.TranslationCard
+import com.manga.translator.translation.MimoTranslator
+import com.manga.translator.util.TextFilter
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import java.io.ByteArrayOutputStream
+import java.util.concurrent.TimeUnit
+
+class AiVisionPipeline(private val context: Context) {
+
+    companion object {
+        private const val TAG = "AiVisionPipeline"
+    }
+
+    data class AiBubbleResult(
+        val x: Int,
+        val y: Int,
+        val width: Int,
+        val height: Int,
+        val text: String,
+        val isVertical: Boolean,
+        val translation: String,
+        val readingOrder: Int
+    )
+
+    data class AiAnalysisResult(
+        val bubbles: List<AiBubbleResult>,
+        val rawResponse: String
+    )
+
+    private val mimoTranslator = MimoTranslator(context)
+    private val gson = Gson()
+
+    private val client = OkHttpClient.Builder()
+        .connectTimeout(30, TimeUnit.SECONDS)
+        .readTimeout(60, TimeUnit.SECONDS)
+        .writeTimeout(30, TimeUnit.SECONDS)
+        .build()
+
+    fun isMiMoConfigured(): Boolean = mimoTranslator.isConfigured()
+
+    fun analyzeImage(bitmap: Bitmap, imageWidth: Int, imageHeight: Int): AiAnalysisResult {
+        Log.d(TAG, "开始AI多模态分析，图片尺寸: ${imageWidth}x${imageHeight}")
+
+        if (!mimoTranslator.isConfigured()) {
+            throw IllegalStateException("MiMo API未配置")
+        }
+
+        val base64Image = bitmapToBase64(bitmap)
+        val prompt = buildPrompt(imageWidth, imageHeight)
+        val response = callMimoVisionApi(base64Image, prompt)
+        val bubbles = parseResponse(response, imageWidth, imageHeight)
+
+        Log.d(TAG, "AI识别到 ${bubbles.size} 个气泡")
+        return AiAnalysisResult(bubbles, response)
+    }
+
+    fun toTranslationCards(result: AiAnalysisResult, lastTranslationRects: List<Rect> = emptyList()): List<TranslationCard> {
+        return result.bubbles
+            .sortedBy { it.readingOrder }
+            .filter { bubble ->
+                bubble.text.isNotBlank() &&
+                    bubble.translation.isNotBlank() &&
+                    !bubble.translation.startsWith("翻译失败") &&
+                    TextFilter.isValidOcrText(bubble.text)
+            }
+            .filter { bubble ->
+                val rect = Rect(bubble.x, bubble.y, bubble.x + bubble.width, bubble.y + bubble.height)
+                lastTranslationRects.none { existing ->
+                    val overlapLeft = maxOf(rect.left, existing.left)
+                    val overlapTop = maxOf(rect.top, existing.top)
+                    val overlapRight = minOf(rect.right, existing.right)
+                    val overlapBottom = minOf(rect.bottom, existing.bottom)
+                    if (overlapLeft < overlapRight && overlapTop < overlapBottom) {
+                        val overlapArea = (overlapRight - overlapLeft) * (overlapBottom - overlapTop)
+                        val rectArea = maxOf(1, rect.width() * rect.height())
+                        overlapArea.toFloat() / rectArea.toFloat() > 0.25f
+                    } else false
+                }
+            }
+            .map { bubble ->
+                TranslationCard(
+                    originalText = bubble.text,
+                    translatedText = bubble.translation,
+                    sourceRect = Rect(bubble.x, bubble.y, bubble.x + bubble.width, bubble.y + bubble.height),
+                    isVertical = bubble.isVertical
+                )
+            }
+    }
+
+    private fun bitmapToBase64(bitmap: Bitmap): String {
+        val outputStream = ByteArrayOutputStream()
+        bitmap.compress(Bitmap.CompressFormat.JPEG, 85, outputStream)
+        val byteArray = outputStream.toByteArray()
+        return Base64.encodeToString(byteArray, Base64.NO_WRAP)
+    }
+
+    private fun buildPrompt(imageWidth: Int, imageHeight: Int): String {
+        return """你是漫画翻译专家。请分析这张漫画图片：
+
+任务：
+1. 识别图片中所有对话气泡的位置（像素坐标）
+2. 识别每个气泡内的日文原文
+3. 将日文翻译成自然中文
+4. 判断文字是竖排还是横排
+5. 按阅读顺序（日漫从右到左、从上到下）编号
+
+输出严格JSON格式，不要其他内容：
+{
+  "bubbles": [
+    {
+      "x": 气泡左上角X像素,
+      "y": 气泡左上角Y像素,
+      "width": 气泡宽度像素,
+      "height": 气泡高度像素,
+      "text": "日文原文",
+      "is_vertical": true或false,
+      "translation": "中文翻译",
+      "reading_order": 1
+    }
+  ]
+}
+
+坐标基于图片尺寸 ${imageWidth}x${imageHeight}。
+如果图片中没有对话气泡，返回 {"bubbles": []}。
+仔细识别所有气泡，包括小的、不规则形状的。
+翻译要自然流畅，保留漫画对白的语气。"""
+    }
+
+    private fun callMimoVisionApi(base64Image: String, prompt: String): String {
+        val apiKey = mimoTranslator.getApiKey()
+        val baseUrl = mimoTranslator.getBaseUrl()
+        val model = mimoTranslator.getModel()
+
+        val request = mapOf(
+            "model" to model,
+            "messages" to listOf(
+                mapOf(
+                    "role" to "user",
+                    "content" to listOf(
+                        mapOf("type" to "text", "text" to prompt),
+                        mapOf(
+                            "type" to "image_url",
+                            "image_url" to mapOf(
+                                "url" to "data:image/jpeg;base64,$base64Image"
+                            )
+                        )
+                    )
+                )
+            ),
+            "temperature" to 0.1,
+            "max_tokens" to 4096
+        )
+
+        val requestBody = gson.toJson(request)
+            .toRequestBody("application/json".toMediaType())
+
+        val httpRequest = Request.Builder()
+            .url(baseUrl)
+            .post(requestBody)
+            .addHeader("Content-Type", "application/json")
+            .addHeader("Authorization", "Bearer $apiKey")
+            .build()
+
+        val response = client.newCall(httpRequest).execute()
+        response.use { resp ->
+            val responseBody = resp.body?.string() ?: throw Exception("响应为空")
+
+            if (!resp.isSuccessful) {
+                throw Exception("HTTP错误: ${resp.code}")
+            }
+
+            val result = gson.fromJson(responseBody, MimoTranslator.ChatResponse::class.java)
+
+            if (result.error != null) {
+                throw Exception("MiMo错误: ${result.error.message}")
+            }
+
+            return result.choices?.firstOrNull()?.message?.content
+                ?: throw Exception("识别结果为空")
+        }
+    }
+
+    private fun parseResponse(response: String, imageWidth: Int, imageHeight: Int): List<AiBubbleResult> {
+        return try {
+            val jsonStr = response.trim()
+                .removePrefix("```json")
+                .removePrefix("```")
+                .removeSuffix("```")
+                .trim()
+
+            val result = gson.fromJson(jsonStr, AiDetectionResult::class.java)
+
+            result.bubbles?.mapNotNull { bubble ->
+                val x = bubble.x ?: return@mapNotNull null
+                val y = bubble.y ?: return@mapNotNull null
+                val width = bubble.width ?: return@mapNotNull null
+                val height = bubble.height ?: return@mapNotNull null
+                val text = bubble.text ?: return@mapNotNull null
+                val translation = bubble.translation ?: return@mapNotNull null
+
+                val safeX = x.coerceIn(0, imageWidth - 1)
+                val safeY = y.coerceIn(0, imageHeight - 1)
+                val safeWidth = width.coerceIn(1, imageWidth - safeX)
+                val safeHeight = height.coerceIn(1, imageHeight - safeY)
+
+                AiBubbleResult(
+                    x = safeX,
+                    y = safeY,
+                    width = safeWidth,
+                    height = safeHeight,
+                    text = text,
+                    isVertical = bubble.isVertical ?: false,
+                    translation = translation,
+                    readingOrder = bubble.readingOrder ?: 0
+                )
+            } ?: emptyList()
+        } catch (e: Exception) {
+            Log.e(TAG, "解析AI响应失败: ${e.message}")
+            Log.d(TAG, "原始响应: $response")
+            emptyList()
+        }
+    }
+
+    private data class AiDetectionResult(
+        val bubbles: List<AiBubble>?
+    )
+
+    private data class AiBubble(
+        val x: Int?,
+        val y: Int?,
+        val width: Int?,
+        val height: Int?,
+        val text: String?,
+        val isVertical: Boolean?,
+        val translation: String?,
+        @SerializedName("reading_order") val readingOrder: Int?
+    )
+}
