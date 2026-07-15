@@ -6,9 +6,13 @@ import android.os.Bundle
 import android.util.Log
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import androidx.lifecycle.lifecycleScope
 import com.manga.translator.databinding.ActivitySettingsBinding
 import com.manga.translator.translation.TranslationPlugin
 import com.manga.translator.translation.TranslatorType
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class SettingsActivity : AppCompatActivity() {
 
@@ -159,31 +163,26 @@ class SettingsActivity : AppCompatActivity() {
         translationPlugin.getBaiduTranslator().setConfig(appId, secretKey)
         Toast.makeText(this, "正在测试百度翻译API...", Toast.LENGTH_SHORT).show()
 
-        Thread {
+        lifecycleScope.launch {
             try {
-                val result = translationPlugin.getBaiduTranslator().test()
-                runOnUiThread {
-                    // 无论结果如何都恢复按钮可用
-                    if (!isFinishing && !isDestroyed) binding.btnTestBaidu.isEnabled = true
-                    if (isFinishing || isDestroyed) return@runOnUiThread
-                    AlertDialog.Builder(this)
-                        .setTitle(if (result.success) "测试成功" else "测试失败")
-                        .setMessage(result.message + if (result.translatedText != null) "\n\n译文: ${result.translatedText}" else "")
-                        .setPositiveButton("确定", null)
-                        .show()
-                }
+                val result = withContext(Dispatchers.IO) { translationPlugin.getBaiduTranslator().test() }
+                if (!isFinishing && !isDestroyed) binding.btnTestBaidu.isEnabled = true
+                if (isFinishing || isDestroyed) return@launch
+                AlertDialog.Builder(this@SettingsActivity)
+                    .setTitle(if (result.success) "测试成功" else "测试失败")
+                    .setMessage(result.message + if (result.translatedText != null) "\n\n译文: ${result.translatedText}" else "")
+                    .setPositiveButton("确定", null)
+                    .show()
             } catch (e: Exception) {
-                runOnUiThread {
-                    if (!isFinishing && !isDestroyed) binding.btnTestBaidu.isEnabled = true
-                    if (isFinishing || isDestroyed) return@runOnUiThread
-                    AlertDialog.Builder(this)
-                        .setTitle("测试异常")
-                        .setMessage("错误信息: ${e.message}")
-                        .setPositiveButton("确定", null)
-                        .show()
-                }
+                if (!isFinishing && !isDestroyed) binding.btnTestBaidu.isEnabled = true
+                if (isFinishing || isDestroyed) return@launch
+                AlertDialog.Builder(this@SettingsActivity)
+                    .setTitle("测试异常")
+                    .setMessage("错误信息: ${e.message}")
+                    .setPositiveButton("确定", null)
+                    .show()
             }
-        }.start()
+        }
     }
 
     private fun testMimoApi() {
@@ -205,31 +204,26 @@ class SettingsActivity : AppCompatActivity() {
         translationPlugin.getMimoTranslator().setConfig(apiKey, finalBaseUrl, finalModel)
         Toast.makeText(this, "正在测试MiMo API...", Toast.LENGTH_SHORT).show()
 
-        Thread {
+        lifecycleScope.launch {
             try {
-                val result = translationPlugin.getMimoTranslator().test()
-                runOnUiThread {
-                    // 无论结果如何都恢复按钮可用
-                    if (!isFinishing && !isDestroyed) binding.btnTestMimo.isEnabled = true
-                    if (isFinishing || isDestroyed) return@runOnUiThread
-                    AlertDialog.Builder(this)
-                        .setTitle(if (result.success) "测试成功" else "测试失败")
-                        .setMessage(result.message + if (result.translatedText != null) "\n\n译文: ${result.translatedText}" else "")
-                        .setPositiveButton("确定", null)
-                        .show()
-                }
+                val result = withContext(Dispatchers.IO) { translationPlugin.getMimoTranslator().test() }
+                if (!isFinishing && !isDestroyed) binding.btnTestMimo.isEnabled = true
+                if (isFinishing || isDestroyed) return@launch
+                AlertDialog.Builder(this@SettingsActivity)
+                    .setTitle(if (result.success) "测试成功" else "测试失败")
+                    .setMessage(result.message + if (result.translatedText != null) "\n\n译文: ${result.translatedText}" else "")
+                    .setPositiveButton("确定", null)
+                    .show()
             } catch (e: Exception) {
-                runOnUiThread {
-                    if (!isFinishing && !isDestroyed) binding.btnTestMimo.isEnabled = true
-                    if (isFinishing || isDestroyed) return@runOnUiThread
-                    AlertDialog.Builder(this)
-                        .setTitle("测试异常")
-                        .setMessage("错误信息: ${e.message}")
-                        .setPositiveButton("确定", null)
-                        .show()
-                }
+                if (!isFinishing && !isDestroyed) binding.btnTestMimo.isEnabled = true
+                if (isFinishing || isDestroyed) return@launch
+                AlertDialog.Builder(this@SettingsActivity)
+                    .setTitle("测试异常")
+                    .setMessage("错误信息: ${e.message}")
+                    .setPositiveButton("确定", null)
+                    .show()
             }
-        }.start()
+        }
     }
 
     private fun loadAiBubbleDetectionSetting(): Boolean {
