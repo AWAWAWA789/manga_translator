@@ -4,11 +4,11 @@
 
 ## v5.00 - 2026-07-16
 
-### 8 周全面改造
+### 全面改造
 
 在 v4.38 基础上做了四个阶段的系统性改造，目标是把之前打地鼠式修 bug 的工作方式换成一次性把根因解决透。下面按阶段列一下做了什么。
 
-#### 阶段1：止血期（W1-W2）
+#### 阶段1
 
 针对线上会崩、会卡、会泄漏的问题做了一轮集中修复：
 
@@ -20,7 +20,7 @@
 6. **AI 路径坐标系错位** — bitmapToBase64 返回缩放比例，analyzeImage 用缩放后尺寸解析再统一除以 scale
 7. **Android 13 通知权限** — AndroidManifest 声明 POST_NOTIFICATIONS，MainActivity 运行时请求
 
-#### 阶段2：架构重构（W3-W5）
+#### 阶段2
 
 把 PluginManager 这个 1000+ 行的上帝类拆开，引入分层和接口：
 
@@ -32,21 +32,21 @@
 6. **minSdk 24 → 26** — 移除 API 24-25 兼容代码，构建体积下降约 2MB
 7. **单元测试** — 新增 `TextFilterTest`（30+ 用例）+ `TranslationPluginTest`（6 用例覆盖重复检测/回退逻辑）+ `StringUtilsTest`。SentenceAssembler/PanelDetector 骨架已写，Robolectric SDK 下载导致 JVM 崩暂 @Ignore
 
-#### 阶段3：安全合规（W6）
+#### 阶段3
 
 1. **HTTPS 强制** — `network_security_config.xml` 的 `cleartextTrafficPermitted` 从 true 改为 false，加 localhost domain-config 例外
 2. **密钥存储审计** — `SecurePrefs.isEncryptionFailed()` 之前从来没被调用，`SettingsActivity` 保存百度/MiMo 配置时检查加密失败，失败时 Toast 警告用户
 3. **输入校验** — 长文本翻译走 POST（原 GET），正则规范用 `\s{2,}` 而非 `\s+` 保留中英文间空格
 4. **OWASP 依赖扫描** — 集成 `dependency-check-gradle:9.0.9`，`failBuildOnCVSS=9.0`，配置 NVD API Key 环境变量注入。NVD 数据库因网络问题暂跳过，工具链就位待网络恢复
 
-#### 阶段4：可观测性 + CI（W7）
+#### 阶段4
 
 1. **统一日志 AppLog** — 新建 `util/AppLog.kt`，Release 包通过 `BuildConfig.DEBUG` 自动屏蔽 DEBUG 日志。核心 4 模块（ScreenCaptureService 50 处 / PluginManager 18 处 / TranslationPlugin 14 处 / OcrProcessor 10 处）共 92 处 Log 调用替换为 AppLog，移除 3 个 private TAG 常量
 2. **崩溃监控 CrashHandler** — 新建 `util/CrashHandler.kt`，实现 `Thread.UncaughtExceptionHandler`，崩溃堆栈写入 `filesDir/crash/crash_yyyy-MM-dd_HH-mm-ss.txt`，含线程名/设备型号/Android 版本/完整堆栈。`MangaTranslatorApp.onCreate` 中初始化，交回系统默认处理器保留"应用已停止"对话框
 3. **性能埋点 PerfTracker** — 新建 `util/PerfTracker.kt`，start/end/finish 模式记录各阶段耗时，总耗时或任一阶段 ≥ 3s 自动升级 Warning。埋点位置：`ScreenCaptureService.processImage`（一次翻译流程）+ `PluginManager.translateImage`（AI多模态识别/OCR识别/翻译三阶段）
 4. **GitHub Actions CI** — 新建 `.github/workflows/ci.yml`：PR 触发 assembleDebug + ktlintCheck + detekt + testDebugUnitTest，主分支额外触发 jacocoTestReport + artifact 上传。JDK 17 + Gradle 8.10 + 缓存 + concurrency 取消旧运行
 
-#### 质量基础设施（W0）
+#### 质量基础设施
 
 为上面所有改造提供度量基础：
 

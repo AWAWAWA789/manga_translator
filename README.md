@@ -640,7 +640,7 @@ mobile/android-native
 
 | 版本 | 主要变化 |
 |------|----------|
-| v5.00 | 8周全面改造：止血期(Bitmap泄漏×5/onDestroy ANR/PluginManager竞态) + 架构重构(Controller/Repository拆分+领域接口+手动DI+协程迁移+minSdk26) + 安全合规(HTTPS强制+加密检测+OWASP) + 可观测性(AppLog/CrashHandler/PerfTracker) + GitHub Actions CI |
+| v5.00 | 全面改造：阶段1(Bitmap泄漏×5/onDestroy ANR/PluginManager竞态) + 阶段2(Controller/Repository拆分+领域接口+手动DI+协程迁移+minSdk26) + 阶段3(HTTPS强制+加密检测+OWASP) + 阶段4(AppLog/CrashHandler/PerfTracker) + GitHub Actions CI |
 | v4.38 | 全面代码审计修复(57项/19文件)：P0崩溃(OcrProcessor Bitmap use-after-free+坐标错位/DebugManager未初始化/executor关闭崩溃) + P1稳定性(suppressToken竞态/资源泄漏×4/加密兜底/HTTPS校验) + P2性能(去重O(n²)优化/StaticLayout缓存/锁竞争/Callback泄漏) + P3代码质量 |
 | v4.37 | 修复：实时翻译时长按菜单失效(isTouching检查，触摸期间跳过截图) |
 | v4.36 | 关键修复(P0)：实时翻译气泡反复闪烁(lastTranslatedHash语义错位，suppress期间同步含气泡哈希) |
