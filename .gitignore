@@ -23,6 +23,10 @@ desktop.ini
 # ===== Native libs 临时解压 =====
 *.so.tmp
 
+# ===== 备份文件 =====
+*.bak
+**/backup/
+
 # ===== 项目临时产物 =====
 .uploads/
 **/output/
