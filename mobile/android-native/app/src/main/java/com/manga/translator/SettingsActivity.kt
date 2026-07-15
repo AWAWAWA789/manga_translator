@@ -153,6 +153,7 @@ class SettingsActivity : AppCompatActivity() {
             try {
                 val result = translationPlugin.getBaiduTranslator().test()
                 runOnUiThread {
+                    if (isFinishing || isDestroyed) return@runOnUiThread
                     AlertDialog.Builder(this)
                         .setTitle(if (result.success) "测试成功" else "测试失败")
                         .setMessage(result.message + if (result.translatedText != null) "\n\n译文: ${result.translatedText}" else "")
@@ -161,6 +162,7 @@ class SettingsActivity : AppCompatActivity() {
                 }
             } catch (e: Exception) {
                 runOnUiThread {
+                    if (isFinishing || isDestroyed) return@runOnUiThread
                     AlertDialog.Builder(this)
                         .setTitle("测试异常")
                         .setMessage("错误信息: ${e.message}")
@@ -191,6 +193,7 @@ class SettingsActivity : AppCompatActivity() {
             try {
                 val result = translationPlugin.getMimoTranslator().test()
                 runOnUiThread {
+                    if (isFinishing || isDestroyed) return@runOnUiThread
                     AlertDialog.Builder(this)
                         .setTitle(if (result.success) "测试成功" else "测试失败")
                         .setMessage(result.message + if (result.translatedText != null) "\n\n译文: ${result.translatedText}" else "")
@@ -199,6 +202,7 @@ class SettingsActivity : AppCompatActivity() {
                 }
             } catch (e: Exception) {
                 runOnUiThread {
+                    if (isFinishing || isDestroyed) return@runOnUiThread
                     AlertDialog.Builder(this)
                         .setTitle("测试异常")
                         .setMessage("错误信息: ${e.message}")

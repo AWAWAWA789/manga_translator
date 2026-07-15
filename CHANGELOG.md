@@ -2,6 +2,305 @@
 
 ---
 
+## v4.35 - 2026-07-15
+
+### 代码质量与稳定性改进（第一批+第二批）
+
+#### 1. compactTranslation 保留英文与中文间空格（P2）
+- **原问题**：`TranslationOverlayView.compactTranslation` 用 `\\s+` 移除所有空白，导致 "OK 好的" 被压成 "OK好的"，英文与中文混排时视觉粘连
+- **修复**：正则改为 `\\s{2,}`，仅合并连续多空格为单空格，保留英文与中文之间的分隔
+
+#### 2. isProcessing 卡住重置后重试前校验状态（P2）
+- **原问题**：`ScreenCaptureService.executeOneShotTranslation` 中 isProcessing 卡住超过 8 秒强制重置后，无条件 postDelayed 重试。若用户已暂停或服务已停止，重试会触发无意义截图
+- **修复**：重试 lambda 增加 `isRunning.get() && !FloatingWindowService.isPaused` 校验，状态变更时跳过重试并输出诊断日志
+
+#### 3. waitForFreshFrame 改用 ConditionVariable 同步（P2）
+- **原问题**：`waitForFreshFrame` 用 7 处 `Thread.sleep(33~50)` 轮询缓存帧，CPU 空转且响应延迟最大 50ms
+- **优化**：新增 `frameAvailableSignal: ConditionVariable`，`imageAvailableListener` 写入缓存后 `open()` 通知，`waitForFreshFrame` 用 `block(remaining)` 等待。close 后二次校验新鲜度，避免错过 close 与 block 之间到达的帧
+
+#### 4. FloatingWindowService 注释乱码修复（P3）
+- **原问题**：6 处中文注释因编码问题出现 `?` 乱码（翻译悬浮层/翻译覆盖层/失败/日文字符/平假名/片假名）
+- **修复**：恢复完整中文注释
+
+#### 5. 关键静默 catch 补充日志（P3）
+- **原问题**：`FloatingWindowService` 中 4 处关键路径静默吞异常（菜单隐藏/覆盖层移除/截图前隐藏UI/截图后恢复UI），故障无从排查
+- **修复**：4 处加 `Log.w` 记录异常信息；高频拖拽 `updateViewLayout` 与销毁清理保持静默避免日志刷屏
+
+#### 6. DebugManager 改 lateinit（P3）
+- **原问题**：`preferences: SharedPreferences?` 可空，所有 getter 重复 `?: false` 兜底分支
+- **优化**：改 `lateinit var`，必须在启动时 `initialize()`，移除全部 `?: false` 兜底，代码更简洁
+
+#### 7. 合并 TranslationCard / TranslationDisplayResult（P3）
+- **原问题**：`FloatingWindowService.TranslationDisplayResult` 与 `model.TranslationCard` 字段完全相同（originalText/translatedText/sourceRect/isVertical），重复定义
+- **优化**：删除 `TranslationDisplayResult`，统一使用 `model.TranslationCard`；`FloatingWindowService` 与 `ScreenCaptureService` 方法签名同步更新
+
+---
+
+## v4.34 - 2026-07-15
+
+### 关键修复：截图失败（VirtualDisplay 分辨率不匹配）
+
+#### 1. 截图失败根因修复（P0）
+- **根因**：`getScreenMetrics` 将 `screenWidth/Height` clamp 到 `1080×1920`，但 `screenDensity` 未等比缩放。高分辨率设备（如 1080×2400@480dpi）被压成 1080×1920@480dpi，纵横比变化导致 GPU 合成器报 `OpenGLRenderer: Unable to match the desired swap behavior`，VirtualDisplay 的 surface 不生产帧，`ImageReader` 永远收不到帧，`cachedBitmap` 始终为 null
+- **修复 1 — 等比缩放**：以宽度为基准等比缩放（`screenHeight = heightPixels * maxWidth / widthPixels`），保持原始宽高比；`screenDensity` 同步缩放并 clamp 到最低 120dpi，保证 VirtualDisplay 与 Surface 尺寸/dpi 自洽
+- **修复 2 — 首帧等待**：`doOneShotCapture` 重试次数 3→4，首次重试后等待 800ms（原 300ms）给 VirtualDisplay 更多时间渲染首帧；超时从 500ms 延长到 1000ms
+- **修复 3 — 监听器解绑**：`recreateCapturePipeline` 先 `setOnImageAvailableListener(null, null)` 再 `close()`，避免旧 ImageReader 在 close 过程中仍回调导致并发问题
+- **修复 4 — MediaProjection 存活检查**：重建前检查 `mediaProjection == null`（用户可能撤销权限），避免无效重建
+- **修复 5 — 首帧到达日志**：监听器在 `lastFrameTimeMs == 0L` 时输出 `首帧到达: WxH`，便于诊断 ImageReader 是否收到帧
+
+### 性能优化
+
+#### 2. OCR 6 遍全并行（P1）
+- **原问题**：`OcrProcessor.recognizeText` 仅横竖向并行，内部 3 版本（enhanced/raw/binary）串行执行，每遍最长 15s，最坏总耗时 45s
+- **优化**：新增专用 6 线程池 `ocrExecutor`，6 遍（3版本 × 2方向）全并行提交，总耗时降至 max(15s)=15s。ML Kit `TextRecognizer` 内部线程安全，可并发调用 `process()`
+
+#### 3. 覆盖层字号二分查找（P1）
+- **原问题**：`TranslationOverlayView.calculateFontSize` 用 while 循环 0.5sp 步长线性递减，每次循环构建 `StaticLayout`，~13 次布局计算
+- **优化**：改为二分查找，StaticLayout 构建次数从 ~13 降至 ~5。横向与竖向字号计算同步优化
+
+#### 4. executor 有界队列（P2）
+- **原问题**：`Executors.newFixedThreadPool(3)` 用无界 `LinkedBlockingQueue`，极端场景任务堆积导致 OOM
+- **优化**：改用 `ThreadPoolExecutor` + 容量 16 的有界队列 + `DiscardOldestPolicy`，防止任务无限堆积
+
+### 翻译流程改进
+
+#### 5. MiMo 批量容错增强（P1）
+- **原问题**：`parseBatchOutput` 仅在编号全覆盖或行数精确匹配时返回结果，偶发多/少一条导致整批失败回退百度，成本高
+- **优化**：编号覆盖 ≥ 半数即接受，缺失条目留空由 `validateAndFallback` 逐条回退；行数多于期望时取前 N 行，避免整批失败
+
+#### 6. 百度翻译改用 POST 表单（P2）
+- **原问题**：`BaiduTranslator.callBaiduApi` 用 GET 拼接 URL，长文本可能超过 URL 长度限制（2KB-8KB）
+- **优化**：改用 `FormBody` POST 表单提交
+
+#### 7. 百度回退走缓存（P2）
+- **原问题**：`TranslationPlugin.validateAndFallback` 和 `translateBatch` 中百度回退直接调用 `baiduTranslator.translate()`，未走 `translate()` 的 LRU 缓存
+- **优化**：改用 `translate()`，复用 LruCache(500)
+
+### 稳定性与内存
+
+#### 8. OpenCV Mat 统一释放（P1）
+- **原问题**：`BubbleDetector.detectBubbles` / `PanelDetector.detectPanels` 在 try 块末尾释放 Mat，异常路径下 native 内存泄漏
+- **优化**：所有 Mat 声明提前，统一在 `finally` 块释放；`contours` 列表由调用方 finally 统一 release，避免 `filterBubbles`/`filterPanels` 提前 return 时泄漏
+
+#### 9. 避让步数增加（P2）
+- `TranslationOverlayView.nudgeAwayFromOccupied` 步长从 3 增加到 5，覆盖更拥挤场景，减少绘制重叠
+
+### 代码卫生
+
+#### 10. 统一 Levenshtein 实现（P2）
+- 新增 `util/StringUtils.kt`，统一 `levenshteinDistance` / `similarity`，消除 `OcrProcessor` 与 `FloatingWindowService` 重复实现
+
+#### 11. 统一 UI 文字黑名单（P2）
+- 移除 `OcrProcessor.UI_TEXT_BLACKLIST` 重复定义，统一引用 `TextFilter.isAppUiText` / `isPureChinese`
+
+#### 12. 日志级别规范化（P3）
+- `PluginManager` 中 5 处 `Log.w`（正常业务日志）改为 `Log.d`，警告级别留给真正的异常
+
+#### 13. inline 函数编译修复（P3）
+- `FloatingWindowService.safeCallback` / `safeCallbackArg` 的 nullable lambda 参数加 `noinline`，修复 Kotlin 编译器严格模式下的告警
+
+---
+
+## v4.33 - 2026-07-15
+
+### 关键修复：翻译气泡瞬间消失 + 后续截图持续失败
+
+#### 1. 翻译气泡瞬间消失（P0）
+- **根因**：实时翻译成功显示 16 个气泡后，`checkScreenChange()` 每 150ms 检测画面变化。覆盖层出现导致像素哈希改变，`movingFrameCount >= 2` 后调用 `clearAllTranslations()` 清除气泡
+- **修复**：新增 `suppressChangeDetection` 标志，显示翻译结果前设为 `true`，800ms 后恢复。抑制期间 `checkScreenChange` 仅更新基线哈希不检测变化，覆盖层出现/消失不再触发清除
+
+#### 2. 后续截图持续失败（P0）
+- **根因**：`getCachedBitmapCopy()` 中 `Bitmap.createBitmap(cached)` 在内存紧张时抛出 `OutOfMemoryError`（是 `Error` 不是 `Exception`），未被 `catch(e: Exception)` 捕获，导致 `waitForFreshFrame` 返回 null
+- **修复 1 — catch Throwable**：`getCachedBitmapCopy` 的 `catch(e: Exception)` 改为 `catch(e: Throwable)`，防止 OOM 导致返回 null
+- **修复 2 — stealCachedBitmap 回退**：新增 `stealCachedBitmap()` 方法，当副本创建失败时直接取走缓存帧（置 null，监听器会创建新的），避免返回 null
+- **修复 3 — waitForFreshFrame 重试**：`requireFresh=false` 时若 `getCachedBitmapCopy` 返回 null，不再立即返回 null，而是继续等待新帧直到超时
+- **修复 4 — 重试优化**：每次重试都检测 HandlerThread 存活状态，增加诊断日志，重试间隔 200ms → 300ms 给重建更多恢复时间
+
+---
+
+## v4.32 - 2026-07-15
+
+### 关键修复：截图持续失败 + 气泡纵向偏差
+
+#### 1. 截图失败根因修复（P0）
+- **根因**：`imageAvailableListener` 以 60fps 每帧创建 ~8MB Bitmap，`OutOfMemoryError`（是 `Error` 不是 `Exception`）未被 `catch(e: Exception)` 捕获，直接杀死 HandlerThread 的 Looper。之后监听器永不触发，`cachedBitmap` 不再更新，所有后续截图返回 null
+- **修复 1 — 限流**：监听器新增 200ms 最小帧间隔，60fps → 5fps，内存分配量降低 92%
+- **修复 2 — catch Throwable**：监听器和 `imageToBitmap` 的 `catch(e: Exception)` 改为 `catch(e: Throwable)`，防止 OOM 杀死 Looper
+- **修复 3 — HandlerThread 重建**：`recreateCapturePipeline` 检测 HandlerThread 存活状态，若已死亡则自动重建
+- **修复 4 — 保留缓存帧**：`recreateCapturePipeline` 不再清空 `cachedBitmap`，保留最后一帧作为 fallback，避免重建期间返回 null
+
+#### 2. 气泡纵向偏差修复（P0）
+- **根因**：`scaleFactor` 仅基于宽度计算（`screenWidth / realScreenWidth`），但 `screenHeight` 被 clamp 到 1920，真实屏幕高度可能 2400+。Y 坐标使用宽度缩放因子（通常 1.0），导致纵向坐标未放大到真实屏幕尺寸
+- **修复**：新增 `scaleFactorY = screenHeight / realScreenHeight`，坐标缩放 X 用 `scaleFactor`、Y 用 `scaleFactorY`
+
+---
+
+## v4.31 - 2026-07-15
+
+### P1: 稳定性与性能修复
+
+#### 1. 帧监听器移至后台 Handler（UI 卡顿修复）
+- `imageAvailableListener` 原注册在主线程 Handler 上，每帧全屏像素拷贝阻塞 UI
+- 新增 `HandlerThread("FrameCapture")`，监听器在后台线程执行 `imageToBitmap()`
+- `onDestroy` 中 `quitSafely()` 清理 HandlerThread
+
+#### 2. checkScreenChange 避免全屏 Bitmap 拷贝（GC 压力修复）
+- 原每 150ms 通过 `Bitmap.createBitmap(cached)` 创建全屏副本（~8MB）用于哈希计算
+- 改为 `synchronized(cachedBitmapLock)` 直接在缓存 Bitmap 上计算哈希，零分配
+
+#### 3. OcrProcessor ML Kit 回调防已回收 Bitmap 崩溃
+- `recognizeBitmap` 返回值改为 `Pair<List<OcrResult>, Boolean>`，第二个值表示回调是否完成
+- `recognizeWithRotation` 仅在 `completed=true` 时回收 rotatedBitmap
+- 超时情况下不回收 Bitmap，交由 GC 处理，避免 ML Kit 内部访问已回收 Bitmap 崩溃
+
+#### 4. PanelDetector contours native 资源释放
+- `detectPanels` 中 `contours` 列表的每个 `MatOfPoint` 从未 release
+- 新增循环 `contour.release()` 统一释放，与 BubbleDetector 保持一致
+
+### P2: 代码质量与潜在风险修复
+
+#### 5. captureAndProcess 双重 recycle 修复
+- `doOcrAndTranslate` 内部已 `bitmap.recycle()`，`captureAndProcess` 的 `finally` 块再次 recycle
+- 移除 finally 块的 recycle，仅在 hash 不匹配的提前退出路径手动 recycle
+
+#### 6. OpenCVHelper isInitialized 线程安全
+- `private var isInitialized` 添加 `@Volatile`，保证多线程可见性
+
+#### 7. SettingsActivity 裸 Thread 防销毁崩溃
+- `testBaiduApi()` / `testMimoApi()` 的 `runOnUiThread` 回调中添加 `isFinishing || isDestroyed` 检查
+- Activity 销毁后不再创建 AlertDialog，避免 WindowLeaked/IllegalStateException
+
+#### 8. 共享 OkHttpClient
+- 新增 `HttpClientProvider` 工具类，提供 `textClient`/`mimoTextClient`/`visionClient` 三个懒加载共享实例
+- `BaiduTranslator`/`MimoTranslator`/`AiVisionPipeline` 各自的独立 Client 替换为共享实例
+- 复用连接池和线程池，减少资源开销
+
+#### 9. SecurePrefs 使用 applicationContext
+- `get(context)` 改为 `context.applicationContext`，避免持有 Activity Context
+
+#### 10. AiVisionPipeline 大图 base64 尺寸限制
+- `bitmapToBase64` 新增最大 1536px 尺寸限制，超过时缩放后再压缩
+- 避免高分辨率截图产生数 MB base64 字符串导致内存峰值
+
+#### 11. FloatingWindowService 静态回调安全化
+- 新增 `safeCallback` / `safeCallbackArg` 内联函数，try-catch 包裹所有回调调用
+- 防止服务异常重建后旧回调指向已销毁的 ScreenCaptureService 导致崩溃
+- 所有 7 处 `?.invoke()` 调用替换为安全调用
+
+### P3: 工程优化
+
+#### 12. TranslationOverlayView onDetachedFromWindow 清理
+- 重写 `onDetachedFromWindow()`，View 被 remove 时取消动画和 clearRunnable
+- 防止 remove 后动画继续运行造成无效绘制
+
+#### 13. BaiduTranslator 共享 Random 实例
+- `Random()` 改为 companion 中的 `private val random = Random()`，避免每次调用创建新对象
+
+#### 14. PluginManager Bitmap 生命周期契约文档
+- `translateImage` 方法添加完整 KDoc，明确调用方负责 bitmap 回收的契约
+
+---
+
+## v4.30 - 2026-07-15
+
+### 一、P0: 截图失败修复（核心问题）
+
+#### 问题
+- 手动翻译时截图持续失败（`acquireLatestImage()` 返回 null），重试 3 次后报"多次重试后仍无图像"
+- 根因：ImageReader `maxImages=2` 缓冲区过小，实时模式停止后无人消费帧导致缓冲区满，VirtualDisplay 停止生产帧
+- `doOneShotCapture` 的 flush+poll 策略无法获取新帧
+
+#### 修复
+- 改用 `OnImageAvailableListener` 回调模式持续消费帧，VirtualDisplay 永不停止生产
+- `maxImages` 从 2 增大到 5，减少帧丢失
+- 新增帧缓存机制（`cachedBitmap` + `cachedBitmapLock`），始终保留最新帧
+- `doOneShotCapture`/`checkScreenChange`/`captureAndProcess` 全部改为从帧缓存读取
+- 新增 `recreateCapturePipeline()` 兜底重建机制，极端情况下自动恢复
+- 新增 `waitForFreshFrame()` 超时等待机制
+
+### 二、P0: 显示方向覆盖修复
+
+#### 问题
+- `doOcrAndTranslate` 中 `isVertical = direction == RecognitionDirection.VERTICAL` 用识别模式覆盖每个卡片的自身方向
+- 用户选竖向识别模式时，横向文本也被强制竖向绘制，排版错乱
+- 使 v4.10 在 OcrPlugin 层的方向修复在显示层失效
+
+#### 修复
+- 改为 `isVertical = card.isVertical`，尊重每个翻译卡片自身的方向判断
+
+### 三、P0: API Key 加密存储
+
+#### 问题
+- 百度 App ID/Secret Key、MiMo API Key 以明文存入 `translation_config` SharedPreferences
+- root 设备或备份导出可轻易读取
+
+#### 修复
+- 新增 `SecurePrefs` 工具类，使用 `EncryptedSharedPreferences`（AES256-GCM）加密存储敏感数据
+- `BaiduTranslator` 敏感字段迁移至加密存储
+- `MimoTranslator` API Key 迁移至加密存储，非敏感配置（baseUrl/model）保持明文
+- 自动迁移逻辑：首次访问时检测旧版明文数据，迁移后从明文文件删除
+- 创建失败时自动回退到普通 SharedPreferences 保证可用性
+
+### 四、P1: native 资源释放
+
+#### 问题
+- `BubbleInfo.contour: MatOfPoint` 字段从未被读取，native 内存未释放
+- `filterBubbles` 中 `hullIndices`/`hull` 在 `solidity` 检查 `continue` 时泄漏
+
+#### 修复
+- 移除 `BubbleInfo.contour` 字段
+- `hullIndices`/`hull` 在所有退出路径（包括 `continue`）均调用 `release()`
+- 检测完成后统一释放所有 contours 的 native 资源
+
+### 五、P1: CompletableFuture 超时保护
+
+#### 问题
+- `OcrProcessor` 横向 OCR 并行等待 `horizontalFuture.get()` / `verticalFuture.get()` 无超时
+- 线程池饱和或 ML Kit 回调异常时永久阻塞
+
+#### 修复
+- 添加 20 秒超时，超时返回空列表并记录日志
+
+### 六、P1: 翻译缓存改为真正 LRU
+
+#### 问题
+- `ConcurrentHashMap` 的 `keys.firstOrNull()` 淘汰不保证插入顺序，可能淘汰高频条目
+
+#### 修复
+- 改用 `android.util.LruCache`，实现真正的 LRU 淘汰策略
+- `clearCache()` 改为 `evictAll()`
+
+### 七、P2: 代码清理与一致性
+
+#### 死代码清理
+- 移除 `PluginManager` 中 `overlapLength()`、`horizontalGap()`、`verticalGap()` 三个未使用方法
+- 移除 `FloatingWindowService.showTranslations()` 未使用的非 Debug 版本
+
+#### 坐标偏移统一
+- AI 路径的坐标偏移从手动构造 `TranslationCard` 改为使用 `withOffset()` 扩展函数
+- 与本地路径统一，避免裁剪配置变更时遗漏一处
+
+#### 调试映射修复
+- `DebugOverlayData.mappings` 此前声明为空列表从未填充
+- 现在正确记录 textRect → panel.rect 映射关系，调试覆盖层映射线功能恢复
+
+#### 网络超时配置统一
+- `MimoTranslator` 新增 `TEXT_*_TIMEOUT` / `VISION_*_TIMEOUT` 常量
+- `AiVisionPipeline` 引用 `MimoTranslator.VISION_*_TIMEOUT` 常量替代魔法数字
+
+### 八、P3: 构建与工程卫生
+
+#### 混淆构建
+- `release` 构建开启 `minifyEnabled true` + `shrinkResources true`
+- 新增 `proguard-rules.pro` 规则：Gson 数据类、ML Kit、OpenCV、EncryptedSharedPreferences、OkHttp、Retrofit、协程 keep 规则
+
+#### 其他
+- 版本号升级：4.20 → 4.30，versionCode 420 → 430
+- 删除残留 `.bak` 备份文件
+- README 版本号同步更新
+
+---
+
 ## v4.20 - 2026-07-14
 
 ### 一、P0: 手动翻译修复

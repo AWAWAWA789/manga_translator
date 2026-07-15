@@ -7,7 +7,7 @@ Android 漫画屏幕翻译工具，目标是实现：
 - 翻译结果覆盖显示在原文位置附近
 - 尽量减少干扰，保留原图阅读体验
 
-当前版本：`4.20`
+当前版本：`4.35`
 
 ---
 
@@ -106,6 +106,8 @@ FloatingWindowService
    - 竖向模式：只跑 3 遍（enhanced/raw/binary × 90°旋转）
    - 横向模式：跑全部 6 遍（3版本 × 2方向）
 
+   6 遍全并行提交到专用 6 线程池（ocrExecutor），总耗时 ≈ 单遍耗时
+
    每遍：
    → ensureMinSize(bitmap, 1100)
    → enhanceForOcr(bitmap, 1.6f)  [灰度+对比度增强]
@@ -161,12 +163,12 @@ FloatingWindowService
     → 创建 TranslationOverlayView（全屏半透明层）
       → 按行聚类，行内从右到左排序
       → 逐个放置，跟踪已占用空间
-      → 计算字体大小（13sp→6.5sp逐步缩小）
+      → 计算字体大小（二分查找，13sp→6.5sp）
       → 竖向：逐字绘制，自动换列
       → 横向：StaticLayout 自动换行
-      → 重叠时轻推避让（竖向左右推，横向上下推）
+      → 重叠时轻推避让（竖向左右推，横向上下推，最多5步）
       → 绘制：白色遮罩 + 圆角卡片 + 文字
-    → 15秒后自动移除
+    → 30秒后自动移除
 
 17. 恢复UI
 ```
@@ -283,10 +285,11 @@ app/src/main/java/com/manga/translator/
 └── util/
     ├── ComicImageCropper.kt           # 图片裁剪
     ├── OpenCVHelper.kt               # OpenCV 初始化
+    ├── StringUtils.kt                # 字符串相似度工具（Levenshtein）
     └── TextFilter.kt                 # 文本过滤工具
 ```
 
-共 23 个 Kotlin 文件。
+共 24 个 Kotlin 文件。
 
 ---
 
@@ -331,7 +334,7 @@ toTranslationCards(result, lastTranslationRects)
   └─ 转为 TranslationCard
 ```
 
-### OcrProcessor.kt（390行）- OCR 识别
+### OcrProcessor.kt（413行）- OCR 识别
 
 ```
 recognizeText(bitmap, verticalOnly)
@@ -342,13 +345,14 @@ recognizeText(bitmap, verticalOnly)
   ├─ 根据 verticalOnly 选择跑几遍：
   │   ├─ verticalOnly=true：3遍（90°旋转）
   │   └─ verticalOnly=false：6遍（0°+90°）
+  ├─ 6 遍全并行提交到 ocrExecutor（6线程专用池）
   ├─ 每遍：recognizeWithRotation()
   │   ├─ 旋转图片
   │   ├─ ML Kit JapaneseTextRecognizer
   │   ├─ 同步等待（CountDownLatch 15s）
   │   ├─ 遍历 TextBlock → Line → Element
   │   ├─ 合并同一 Block 的 Lines
-  │   ├─ 过滤 UI 文字
+  │   ├─ 过滤 UI 文字（统一引用 TextFilter）
   │   └─ mapRectBack() 坐标还原
   ├─ deduplicateResults() 逐层去重
   └─ 坐标缩放回原图
@@ -377,7 +381,7 @@ assemble(blocks)
   └─ 日文助词连续判断（shouldContinueJapanese）
 ```
 
-### TranslationOverlayView.kt（520行）- 覆盖层渲染
+### TranslationOverlayView.kt（559行）- 覆盖层渲染
 
 ```
 setTranslations(items) → onDraw()
@@ -388,10 +392,10 @@ buildLayout()
   │   ├─ normalizeSourceRect()：扩展边距
   │   ├─ constrainDisplayRect()：限制屏幕比例
   │   ├─ placeHorizontalText() / placeVerticalText()
-  │   │   ├─ 计算字体大小（13sp→6.5sp逐步缩小）
+  │   │   ├─ 计算字体大小（二分查找，13sp→6.5sp）
   │   │   ├─ 竖向：逐字绘制，自动换列
   │   │   └─ 横向：StaticLayout 自动换行
-  │   └─ nudgeAwayFromOccupied()：重叠时轻推避让
+  │   └─ nudgeAwayFromOccupied()：重叠时轻推避让（最多5步）
   └─ 记录已占用空间
 
 onDraw()
@@ -409,15 +413,21 @@ onDraw()
 
 | 参数 | 值 | 说明 |
 |------|-----|------|
-| 版本号 | `4.10` | versionName |
-| versionCode | `410` | Android 构建版本 |
+| 版本号 | `4.35` | versionName |
+| versionCode | `435` | Android 构建版本 |
 | 默认识别方向 | 竖向 | `RecognitionDirection.VERTICAL` |
 | 最大翻译区域 | 18 | `MAX_TRANSLATION_REGIONS` |
 | OCR最小尺寸 | 1100 | 小图放大 |
 | OCR最大尺寸 | 1600 | 预处理尺寸上限 |
 | OCR增强对比度 | 1.6 | 灰度+对比度增强 |
-| 覆盖层自动消失 | 15s | `AUTO_REMOVE_MS` |
+| OCR并行线程数 | 6 | `ocrExecutor` 专用线程池（3版本×2方向全并行） |
+| 覆盖层自动消失 | 30s | `AUTO_REMOVE_MS` |
+| 覆盖层避让步数 | 5 | `nudgeAwayFromOccupied` 最大步长 |
 | 截屏前隐藏等待 | 400ms | 避免识别旧翻译框 |
+| 截图重试次数 | 4 | `doOneShotCapture` 最大重试 |
+| 截图首帧等待 | 800ms | 重建后首次重试延迟 |
+| executor 队列容量 | 16 | 有界队列 + DiscardOldestPolicy |
+| 翻译缓存容量 | 500 | `LruCache` |
 | 画面变化阈值 | 1.2% | 像素哈希变化比例 |
 | 静止帧数要求 | 2帧 | 连续静止才翻译 |
 | 最大合并字数 | 竖46/横42 | SentenceAssembler |
@@ -557,6 +567,13 @@ mobile/android-native
 
 | 版本 | 主要变化 |
 |------|----------|
+| v4.35 | 代码质量改进：compactTranslation保留空格 + isProcessing重试状态校验 + waitForFreshFrame改ConditionVariable + 注释乱码修复 + 静默catch加日志 + DebugManager改lateinit + 合并TranslationCard/TranslationDisplayResult |
+| v4.34 | 截图失败根因修复(VirtualDisplay分辨率等比缩放) + OCR 6遍全并行 + 字号二分查找 + MiMo批量容错 + 百度POST表单 + Mat统一释放 + StringUtils统一 |
+| v4.33 | 气泡消失修复(suppressChangeDetection) + 截图OOM回退(stealCachedBitmap) + 重试优化 |
+| v4.32 | 截图OOM根因修复(限流+catch Throwable+HandlerThread重建) + 气泡纵向偏差修复(scaleFactorY) |
+| v4.31 | 深度检测修复：后台帧处理+零拷贝哈希+OCR防崩溃+native释放+共享HTTP+回调安全化 |
+| v4.30 | 截图管线重构(帧缓存+监听器) + 方向覆盖修复 + API Key加密 + LRU缓存 + native资源释放 + 混淆构建 |
+| v4.20 | 线程池规范化 + isProcessing卡死保护 + 超时重试机制 |
 | v4.10 | AI 多模态全流程识别 + 大规模代码清理（删除7个文件/1000+行死代码）+ 逻辑修复 |
 | v4.00 | 句子优先流程 + 坐标修正（mapRectBack 90°/270°）+ 覆盖层轻推避让 |
 | v3.00 | 悬浮球菜单重设计 + 菜单文本修复 |

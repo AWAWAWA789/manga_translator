@@ -9,6 +9,8 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import com.manga.translator.util.SecurePrefs
+import com.manga.translator.util.HttpClientProvider
 import java.util.concurrent.TimeUnit
 
 class MimoTranslator(private val context: Context) {
@@ -22,17 +24,22 @@ class MimoTranslator(private val context: Context) {
         private const val DEFAULT_BASE_URL = "https://api.xiaomimimo.com/v1/chat/completions"
         private const val DEFAULT_MODEL = "mimo-v2.5"
         private const val MAX_BATCH_SIZE = 10
+
+        // 统一网络超时配置
+        const val TEXT_CONNECT_TIMEOUT = 8L
+        const val TEXT_READ_TIMEOUT = 12L
+        const val TEXT_WRITE_TIMEOUT = 8L
+        const val VISION_CONNECT_TIMEOUT = 30L
+        const val VISION_READ_TIMEOUT = 60L
+        const val VISION_WRITE_TIMEOUT = 30L
     }
     
+    // 敏感数据（API Key）使用加密存储，非敏感配置使用普通存储
+    private val securePreferences: SharedPreferences = SecurePrefs.get(context)
     private val preferences: SharedPreferences = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
     private val gson = Gson()
     
-    private val client = OkHttpClient.Builder()
-        .connectTimeout(8, TimeUnit.SECONDS)
-        .readTimeout(12, TimeUnit.SECONDS)
-        .writeTimeout(8, TimeUnit.SECONDS)
-        .retryOnConnectionFailure(true)
-        .build()
+    private val client = HttpClientProvider.mimoTextClient
     
     data class ChatRequest(
         val model: String,
@@ -70,7 +77,7 @@ class MimoTranslator(private val context: Context) {
     }
     
     fun getApiKey(): String {
-        return preferences.getString(KEY_API_KEY, "") ?: ""
+        return securePreferences.getString(KEY_API_KEY, "") ?: ""
     }
     
     fun getBaseUrl(): String {
@@ -82,8 +89,8 @@ class MimoTranslator(private val context: Context) {
     }
     
     fun setConfig(apiKey: String, baseUrl: String, model: String) {
+        securePreferences.edit().putString(KEY_API_KEY, apiKey).apply()
         preferences.edit()
-            .putString(KEY_API_KEY, apiKey)
             .putString(KEY_BASE_URL, baseUrl)
             .putString(KEY_MODEL, model)
             .apply()
@@ -235,13 +242,23 @@ $source"""
             index to cleanOutput(match.groupValues[2])
         }.toMap()
 
-        if (numbered.size >= expectedSize) {
+        // 优先用编号匹配：只要编号覆盖了期望数量就接受，缺失的留空由调用方回退
+        if (numbered.isNotEmpty()) {
             val ordered = (1..expectedSize).map { numbered[it].orEmpty() }
-            if (ordered.all { it.isNotBlank() }) return ordered
+            // 全部非空直接返回；部分缺失也返回（由 validateAndFallback 逐条回退），避免整批失败
+            if (ordered.count { it.isNotBlank() } >= (expectedSize + 1) / 2) {
+                return ordered
+            }
         }
 
+        // 无编号时，行数匹配则直接使用
         if (lines.size == expectedSize) {
             return lines.map { cleanOutput(it) }
+        }
+
+        // 行数多于期望（可能多输出了解释行）：取前 expectedSize 行
+        if (lines.size > expectedSize) {
+            return lines.take(expectedSize).map { cleanOutput(it) }
         }
 
         return null

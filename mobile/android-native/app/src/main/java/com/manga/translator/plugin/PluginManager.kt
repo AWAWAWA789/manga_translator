@@ -78,6 +78,20 @@ class PluginManager(private val context: Context) {
         return translationPlugin
     }
     
+    /**
+     * 翻译图片入口。
+     *
+     * Bitmap 生命周期契约：
+     * - 此方法不回收传入的 bitmap，调用方负责回收
+     * - 内部裁剪产生的 croppedBitmap 由本方法回收
+     * - AI 路径的 base64 转换不持有 bitmap 引用
+     *
+     * @param bitmap 待翻译的截图，调用方负责 recycle
+     * @param lastTranslationRects 上一帧翻译区域，用于去重过滤
+     * @param verticalOnly 是否强制竖向识别模式
+     * @param isManual 是否为手动翻译（影响 AI 路径选择）
+     * @return 翻译卡片列表
+     */
     fun translateImage(bitmap: Bitmap, lastTranslationRects: List<Rect> = emptyList(), verticalOnly: Boolean = false, isManual: Boolean = false): List<TranslationCard> {
         if (!isInitialized) {
             Log.e(TAG, "插件管理器未初始化")
@@ -85,7 +99,7 @@ class PluginManager(private val context: Context) {
         }
         
         Log.d(TAG, "开始翻译图片: ${bitmap.width}x${bitmap.height}")
-        Log.w(TAG, "=== PluginManager v3 已加载 ===")
+        Log.d(TAG, "=== PluginManager v3 已加载 ===")
         
         val cropRect = ComicImageCropper.getCropRect(bitmap.width, bitmap.height, cropConfig)
         val croppedBitmap = ComicImageCropper.cropComicArea(bitmap, cropConfig)
@@ -97,19 +111,7 @@ class PluginManager(private val context: Context) {
                 Log.d(TAG, "使用AI多模态识别")
                 val aiResult = aiVisionPipeline.analyzeImage(croppedBitmap, croppedBitmap.width, croppedBitmap.height)
                 val cards = aiVisionPipeline.toTranslationCards(aiResult, lastTranslationRects)
-                    .map { card ->
-                        TranslationCard(
-                            originalText = card.originalText,
-                            translatedText = card.translatedText,
-                            sourceRect = Rect(
-                                card.sourceRect.left + cropRect.left,
-                                card.sourceRect.top + cropRect.top,
-                                card.sourceRect.right + cropRect.left,
-                                card.sourceRect.bottom + cropRect.top
-                            ),
-                            isVertical = card.isVertical
-                        )
-                    }
+                    .map { card -> card.withOffset(cropRect.left, cropRect.top) }
                 Log.d(TAG, "AI多模态: ${cards.size} 个翻译结果")
                 if (croppedBitmap != bitmap) croppedBitmap.recycle()
                 return cards
@@ -179,6 +181,7 @@ class PluginManager(private val context: Context) {
             val panel = if (panels.isNotEmpty()) panelDetector.findPanelForRect(panels, textRect) else null
             if (panel != null) {
                 orderedBubbles.add(panel.rect)
+                debugMappings.add(textRect to panel.rect)
             }
         }
         val regionCandidates = sentenceRegions
@@ -193,7 +196,7 @@ class PluginManager(private val context: Context) {
         )
 
         val limitedRegions = limitRegions(regions)
-        Log.w(TAG, "=== 句子优先: 输入${ocrBlocks.size}块, 句子${sentenceRegions.size}个, 去重${regions.size}, 最终${limitedRegions.size}区域 ===")
+        Log.d(TAG, "=== 句子优先: 输入${ocrBlocks.size}块, 句子${sentenceRegions.size}个, 去重${regions.size}, 最终${limitedRegions.size}区域 ===")
 
         val translatedTexts = translationPlugin.translateBatch(limitedRegions.map { it.text })
         return limitedRegions.mapIndexed { index, region ->
@@ -214,7 +217,7 @@ class PluginManager(private val context: Context) {
     ): List<TextRegion> {
         val blocks = dedupeBlocksInBubble(ocrBlocks)
         val sentenceGroups = sentenceAssembler.assemble(blocks)
-        Log.w(TAG, "句子优先组装: ${ocrBlocks.size}块→去重${blocks.size}块→${sentenceGroups.size}句")
+        Log.d(TAG, "句子优先组装: ${ocrBlocks.size}块→去重${blocks.size}块→${sentenceGroups.size}句")
 
         return sentenceGroups.mapNotNull { sentenceBlocks ->
             val textRect = unionRects(sentenceBlocks.map { it.rect })
@@ -232,7 +235,7 @@ class PluginManager(private val context: Context) {
         val blockSummary = blocks.joinToString(" | ") { block ->
             "${block.text.trim()}@[${block.rect.left},${block.rect.top},${block.rect.right},${block.rect.bottom}]"
         }
-        Log.w(
+        Log.d(
             TAG,
             "句子调试: text='${region.text}' anchor=[${region.outputRect.centerX()},${region.outputRect.centerY()}] textRect=${region.textRect.toShortString()} out=${region.outputRect.toShortString()} blocks=$blockSummary"
         )
@@ -305,7 +308,7 @@ class PluginManager(private val context: Context) {
             val dy = abs(block.rect.centerY() - textRect.centerY()).toFloat()
             dx + dy - block.confidence * 40f
         } ?: blocks.first()
-        Log.w(TAG, "锚点选择: textRect=${textRect.toShortString()} anchor='${anchor.text.trim()}' rect=${anchor.rect.toShortString()} conf=${anchor.confidence}")
+        Log.d(TAG, "锚点选择: textRect=${textRect.toShortString()} anchor='${anchor.text.trim()}' rect=${anchor.rect.toShortString()} conf=${anchor.confidence}")
         return anchor
     }
 
@@ -348,26 +351,6 @@ class PluginManager(private val context: Context) {
         if (ca.length <= 2 || cb.length <= 2) return false
         val common = ca.count { cb.contains(it) }
         return common.toFloat() / minOf(ca.length, cb.length).toFloat() > 0.7f
-    }
-
-    private fun overlapLength(aStart: Int, aEnd: Int, bStart: Int, bEnd: Int): Int {
-        return maxOf(0, minOf(aEnd, bEnd) - maxOf(aStart, bStart))
-    }
-
-    private fun horizontalGap(a: Rect, b: Rect): Int {
-        return when {
-            a.right < b.left -> b.left - a.right
-            b.right < a.left -> a.left - b.right
-            else -> 0
-        }
-    }
-
-    private fun verticalGap(a: Rect, b: Rect): Int {
-        return when {
-            a.bottom < b.top -> b.top - a.bottom
-            b.bottom < a.top -> a.top - b.bottom
-            else -> 0
-        }
     }
 
     private fun limitRegions(regions: List<TextRegion>): List<TextRegion> {

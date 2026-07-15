@@ -1,4 +1,4 @@
-﻿package com.manga.translator.service
+package com.manga.translator.service
 
 import android.app.Service
 import android.content.Context
@@ -21,6 +21,7 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import com.manga.translator.debug.DebugOverlayConfig
 import com.manga.translator.debug.DebugOverlayData
+import com.manga.translator.model.TranslationCard
 import kotlin.math.abs
 
 class FloatingWindowService : Service() {
@@ -38,35 +39,30 @@ class FloatingWindowService : Service() {
         var onTouchStateChanged: ((Boolean) -> Unit)? = null
         var onRecognitionDirectionChanged: ((RecognitionDirection) -> Unit)? = null
 
+        /** 安全调用回调，防止目标服务已销毁导致崩溃 */
+        private inline fun <T> safeCallback(noinline callback: (() -> T)?) {
+            try { callback?.invoke() } catch (e: Exception) {
+                Log.e(TAG, "回调执行异常: ${e.message}")
+            }
+        }
+        private inline fun <T, R> safeCallbackArg(noinline callback: ((T) -> R)?, arg: T) {
+            try { callback?.invoke(arg) } catch (e: Exception) {
+                Log.e(TAG, "回调执行异常: ${e.message}")
+            }
+        }
+
         @Volatile var currentMode: TranslateMode = TranslateMode.MANUAL; private set
         @Volatile var isPaused: Boolean = false; private set
         @Volatile var isTouching: Boolean = false; private set
         @Volatile var recognitionDirection: RecognitionDirection = RecognitionDirection.VERTICAL
         @Volatile var debugConfig: DebugOverlayConfig = DebugOverlayConfig(); private set
 
-        data class TranslationDisplayResult(
-            val originalText: String,
-            val translatedText: String,
-            val sourceRect: Rect,
-            val isVertical: Boolean
-        )
-
         @Suppress("StaticFieldLeak")
         private var instance: FloatingWindowService? = null
 
-        fun showTranslations(@Suppress("UNUSED_PARAMETER") context: Context, results: List<Triple<String, String, Rect?>>) {
-            instance?.let { service ->
-                service.handler.post {
-                    service.addTranslationOverlays(results.mapNotNull { (original, translated, rect) ->
-                        rect?.let { TranslationDisplayResult(original, translated, it, recognitionDirection == RecognitionDirection.VERTICAL) }
-                    })
-                }
-            }
-        }
-        
         fun showTranslationsWithDebug(
-            @Suppress("UNUSED_PARAMETER") context: Context, 
-            results: List<TranslationDisplayResult>,
+            @Suppress("UNUSED_PARAMETER") context: Context,
+            results: List<TranslationCard>,
             debugData: DebugOverlayData
         ) {
             instance?.let { service ->
@@ -217,7 +213,7 @@ class FloatingWindowService : Service() {
                 isDragging = false
                 isTouching = true
                 longPressTriggered = false
-                onTouchStateChanged?.invoke(true)
+                safeCallbackArg(onTouchStateChanged, true)
                 lastTouchX = event.rawX
                 lastTouchY = event.rawY
                 mainParams?.let { lastMainX = it.x; lastMainY = it.y }
@@ -253,7 +249,7 @@ class FloatingWindowService : Service() {
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                 view.animate().scaleX(1f).scaleY(1f).setDuration(80).start()
                 isTouching = false
-                onTouchStateChanged?.invoke(false)
+                safeCallbackArg(onTouchStateChanged, false)
                 longPressRunnable?.let { handler.removeCallbacks(it) }
                 longPressRunnable = null
 
@@ -272,7 +268,7 @@ class FloatingWindowService : Service() {
             hideMenu()
         } else {
             setStatusText("...")
-            onManualTranslate?.invoke()
+                safeCallback(onManualTranslate)
         }
     }
 
@@ -300,12 +296,12 @@ class FloatingWindowService : Service() {
             val row1 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
             addMenuButton(row1, "实时翻译", d, currentMode == TranslateMode.REALTIME) {
                 isPaused = false; currentMode = TranslateMode.REALTIME
-                onModeChanged?.invoke(currentMode); onPauseChanged?.invoke(false)
+                safeCallbackArg(onModeChanged, currentMode); safeCallbackArg(onPauseChanged, false)
                 updateMainViewAppearance(); hideMenu()
             }
             addMenuButton(row1, "手动翻译", d, currentMode == TranslateMode.MANUAL) {
                 isPaused = false; currentMode = TranslateMode.MANUAL
-                onModeChanged?.invoke(currentMode); onPauseChanged?.invoke(false)
+                safeCallbackArg(onModeChanged, currentMode); safeCallbackArg(onPauseChanged, false)
                 updateMainViewAppearance(); hideMenu()
             }
             menuLayout.addView(row1, LinearLayout.LayoutParams(
@@ -319,7 +315,7 @@ class FloatingWindowService : Service() {
             addMenuButton(row2, "横向识别", d, recognitionDirection == RecognitionDirection.HORIZONTAL) {
                 if (recognitionDirection != RecognitionDirection.HORIZONTAL) {
                     recognitionDirection = RecognitionDirection.HORIZONTAL
-                    onRecognitionDirectionChanged?.invoke(RecognitionDirection.HORIZONTAL)
+                    safeCallbackArg(onRecognitionDirectionChanged, RecognitionDirection.HORIZONTAL)
                     Log.d(TAG, "识别方向切换为: HORIZONTAL")
                 }
                 updateMainViewAppearance(); hideMenu()
@@ -327,7 +323,7 @@ class FloatingWindowService : Service() {
             addMenuButton(row2, "竖向识别", d, recognitionDirection == RecognitionDirection.VERTICAL) {
                 if (recognitionDirection != RecognitionDirection.VERTICAL) {
                     recognitionDirection = RecognitionDirection.VERTICAL
-                    onRecognitionDirectionChanged?.invoke(RecognitionDirection.VERTICAL)
+                    safeCallbackArg(onRecognitionDirectionChanged, RecognitionDirection.VERTICAL)
                     Log.d(TAG, "识别方向切换为: VERTICAL")
                 }
                 updateMainViewAppearance(); hideMenu()
@@ -341,7 +337,7 @@ class FloatingWindowService : Service() {
             // Row 3: 暂停翻译 | 关闭菜单
             val row3 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
             addMenuButton(row3, if (isPaused) "恢复翻译" else "暂停翻译", d, false) {
-                isPaused = !isPaused; onPauseChanged?.invoke(isPaused)
+                isPaused = !isPaused; safeCallbackArg(onPauseChanged, isPaused)
                 updateMainViewAppearance(); hideMenu()
             }
             addMenuButton(row3, "关闭菜单", d, false) {
@@ -430,19 +426,20 @@ class FloatingWindowService : Service() {
                     isMenuShowing = false
                 }
                 .start()
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            Log.w(TAG, "菜单隐藏失败: ${e.message}")
             try { windowManager?.removeViewImmediate(view) } catch (_: Exception) {}
             menuView = null; isMenuShowing = false
         }
     }
 
-    // ==================== 翻译悬浮�?====================
+    // ==================== 翻译悬浮层 ====================
 
-    private fun addTranslationOverlays(results: List<TranslationDisplayResult>) {
+    private fun addTranslationOverlays(results: List<TranslationCard>) {
         addTranslationOverlaysWithDebug(results, DebugOverlayData())
     }
-    
-    private fun addTranslationOverlaysWithDebug(results: List<TranslationDisplayResult>, debugData: DebugOverlayData) {
+
+    private fun addTranslationOverlaysWithDebug(results: List<TranslationCard>, debugData: DebugOverlayData) {
         val overlayItems = results.mapNotNull { result ->
             val originalText = result.originalText.trim()
             val translatedText = result.translatedText.trim()
@@ -468,7 +465,7 @@ class FloatingWindowService : Service() {
 
         val dedupedItems = deduplicateTranslations(overlayItems)
 
-        Log.d(TAG, "翻译覆盖�? 输入=${results.size}, 有效=${overlayItems.size}, 去重�?${dedupedItems.size}")
+        Log.d(TAG, "翻译覆盖层: 输入=${results.size}, 有效=${overlayItems.size}, 去重后=${dedupedItems.size}")
 
         val limitedItems = if (dedupedItems.size > 16) {
             dedupedItems.sortedByDescending { it.translatedText.length }.take(16)
@@ -516,12 +513,13 @@ class FloatingWindowService : Service() {
             translationRemoveRunnable = Runnable { removeAllTranslationOverlays() }
             handler.postDelayed(translationRemoveRunnable!!, AUTO_REMOVE_MS)
         } catch (e: Exception) {
-            Log.e(TAG, "添加翻译覆盖层失�? ${e.message}")
+            Log.e(TAG, "添加翻译覆盖层失败: ${e.message}")
         }
     }
 
     /**
-     * 去重：翻译文本高度相似的只保留一�?     */
+     * 去重：翻译文本高度相似的只保留一条
+     */
     private fun deduplicateTranslations(items: List<TranslationOverlayView.TranslationItem>): List<TranslationOverlayView.TranslationItem> {
         if (items.size <= 1) return items
         val kept = mutableListOf<TranslationOverlayView.TranslationItem>()
@@ -539,24 +537,7 @@ class FloatingWindowService : Service() {
     }
 
     private fun calculateTextSimilarity(a: String, b: String): Float {
-        if (a == b) return 1f
-        if (a.isEmpty() || b.isEmpty()) return 0f
-        val maxLen = maxOf(a.length, b.length)
-        val distance = levenshteinDistance(a, b)
-        return 1f - (distance.toFloat() / maxLen)
-    }
-
-    private fun levenshteinDistance(s1: String, s2: String): Int {
-        val dp = Array(s1.length + 1) { IntArray(s2.length + 1) }
-        for (i in 0..s1.length) dp[i][0] = i
-        for (j in 0..s2.length) dp[0][j] = j
-        for (i in 1..s1.length) {
-            for (j in 1..s2.length) {
-                val cost = if (s1[i - 1] == s2[j - 1]) 0 else 1
-                dp[i][j] = minOf(dp[i - 1][j] + 1, dp[i][j - 1] + 1, dp[i - 1][j - 1] + cost)
-            }
-        }
-        return dp[s1.length][s2.length]
+        return com.manga.translator.util.StringUtils.similarity(a, b)
     }
 
     private fun calculateRectOverlap(a: Rect, b: Rect): Float {
@@ -572,12 +553,15 @@ class FloatingWindowService : Service() {
     }
 
     /**
-     * 检测是否包含日文字�?     */
+     * 检测是否包含日文字符
+     */
     private fun containsJapanese(text: String): Boolean {
         for (char in text) {
             val code = char.code
-            // 平假�?            if (code in 0x3040..0x309F) return true
-            // 片假�?            if (code in 0x30A0..0x30FF) return true
+            // 平假名
+            if (code in 0x3040..0x309F) return true
+            // 片假名
+            if (code in 0x30A0..0x30FF) return true
         }
         return false
     }
@@ -588,7 +572,9 @@ class FloatingWindowService : Service() {
         try {
             translationOverlayView?.clearTranslations()
             translationOverlayView?.let { windowManager?.removeViewImmediate(it) }
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            Log.w(TAG, "移除翻译覆盖层失败: ${e.message}")
+        }
         translationOverlayView = null
     }
 
@@ -602,7 +588,10 @@ class FloatingWindowService : Service() {
             }
             hideMenu()
             removeAllTranslationOverlays()
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            // 截图前隐藏 UI 失败会导致悬浮球/覆盖层被截入画面，需记录便于排查
+            Log.w(TAG, "截图前隐藏UI失败: ${e.message}")
+        }
     }
 
     private fun restoreUIAfterCapture() {
@@ -612,7 +601,10 @@ class FloatingWindowService : Service() {
             mainView?.let {
                 it.visibility = View.VISIBLE
             }
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            // 恢复失败会导致悬浮球长期不可见，需记录
+            Log.w(TAG, "截图后恢复UI失败: ${e.message}")
+        }
     }
 
     private fun setStatusText(text: String) {

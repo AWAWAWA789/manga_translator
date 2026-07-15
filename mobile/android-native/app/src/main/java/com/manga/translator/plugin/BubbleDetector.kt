@@ -37,7 +37,6 @@ class BubbleDetector {
     
     data class BubbleInfo(
         val rect: Rect,
-        val contour: MatOfPoint,
         val area: Double,
         val centerX: Int,
         val centerY: Int,
@@ -46,29 +45,28 @@ class BubbleDetector {
     
     fun detectBubbles(bitmap: Bitmap): List<BubbleInfo> {
         Log.d(TAG, "开始气泡检测，图片尺寸: ${bitmap.width}x${bitmap.height}")
-        
+
+        val rgbaMat = Mat()
+        val grayMat = Mat()
+        val blurredMat = Mat()
+        val edgesMat = Mat()
+        val dilatedMat = Mat()
+        var kernel: Mat? = null
+        val hierarchy = Mat()
+        val contours = mutableListOf<MatOfPoint>()
+
         try {
-            val rgbaMat = Mat()
             Utils.bitmapToMat(bitmap, rgbaMat)
-            
-            val grayMat = Mat()
             Imgproc.cvtColor(rgbaMat, grayMat, Imgproc.COLOR_RGBA2GRAY)
-            
-            val blurredMat = Mat()
             Imgproc.GaussianBlur(grayMat, blurredMat, Size(BLUR_SIZE, BLUR_SIZE), 0.0)
-            
-            val edgesMat = Mat()
             Imgproc.Canny(blurredMat, edgesMat, CANNY_THRESHOLD1, CANNY_THRESHOLD2)
-            
-            val kernel = Imgproc.getStructuringElement(
+            kernel = Imgproc.getStructuringElement(
                 Imgproc.MORPH_RECT,
                 Size(MORPH_KERNEL_SIZE, MORPH_KERNEL_SIZE)
             )
-            val dilatedMat = Mat()
-            Imgproc.dilate(edgesMat, dilatedMat, kernel, org.opencv.core.Point(-1.0, -1.0), MORPH_ITERATIONS)
-            
-            val contours = mutableListOf<MatOfPoint>()
-            val hierarchy = Mat()
+            val kernelMat = kernel!!
+            Imgproc.dilate(edgesMat, dilatedMat, kernelMat, org.opencv.core.Point(-1.0, -1.0), MORPH_ITERATIONS)
+
             Imgproc.findContours(
                 dilatedMat,
                 contours,
@@ -76,26 +74,30 @@ class BubbleDetector {
                 Imgproc.RETR_EXTERNAL,
                 Imgproc.CHAIN_APPROX_SIMPLE
             )
-            
+
             Log.d(TAG, "找到 ${contours.size} 个轮廓")
-            
+
             val bubbles = filterBubbles(contours, bitmap.width, bitmap.height)
-            
+
             Log.d(TAG, "筛选后 ${bubbles.size} 个气泡")
-            
+
+            return bubbles
+
+        } catch (e: Exception) {
+            Log.e(TAG, "气泡检测失败: ${e.message}")
+            return emptyList()
+        } finally {
+            // 统一在 finally 中释放所有 native 资源，避免异常路径下内存泄漏
             rgbaMat.release()
             grayMat.release()
             blurredMat.release()
             edgesMat.release()
             dilatedMat.release()
-            kernel.release()
+            try { kernel?.release() } catch (_: UninitializedPropertyAccessException) {} catch (_: Exception) {}
             hierarchy.release()
-            
-            return bubbles
-            
-        } catch (e: Exception) {
-            Log.e(TAG, "气泡检测失败: ${e.message}")
-            return emptyList()
+            for (contour in contours) {
+                contour.release()
+            }
         }
     }
     
@@ -135,6 +137,8 @@ class BubbleDetector {
             val hullArea = Imgproc.contourArea(hull)
             val solidity = if (hullArea > 0) area / hullArea else 0.0
             if (solidity < MIN_SOLIDITY) {
+                hullIndices.release()
+                hull.release()
                 continue
             }
             
@@ -144,19 +148,23 @@ class BubbleDetector {
                 minOf(imageWidth, rect.x + rect.width),
                 minOf(imageHeight, rect.y + rect.height)
             )
-            
+
             val isVertical = safeRect.height() > safeRect.width() * 1.35
-            
+
             bubbles.add(BubbleInfo(
                 rect = safeRect,
-                contour = contour,
                 area = area,
                 centerX = safeRect.centerX(),
                 centerY = safeRect.centerY(),
                 isVertical = isVertical
             ))
+
+            // 释放中间 Mat 资源
+            hullIndices.release()
+            hull.release()
         }
-        
+
+        // contours 由调用方 detectBubbles 的 finally 块统一释放
         return bubbles.sortedByDescending { it.area }
     }
     

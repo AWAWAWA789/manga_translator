@@ -7,7 +7,7 @@ import org.opencv.android.OpenCVLoader
 object OpenCVHelper {
     
     private const val TAG = "OpenCVHelper"
-    private var isInitialized = false
+    @Volatile private var isInitialized = false
     
     fun initialize(context: Context): Boolean {
         if (isInitialized) {

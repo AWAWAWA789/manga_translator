@@ -10,8 +10,8 @@ import com.google.gson.annotations.SerializedName
 import com.manga.translator.model.TranslationCard
 import com.manga.translator.translation.MimoTranslator
 import com.manga.translator.util.TextFilter
+import com.manga.translator.util.HttpClientProvider
 import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.ByteArrayOutputStream
@@ -42,11 +42,7 @@ class AiVisionPipeline(private val context: Context) {
     private val mimoTranslator = MimoTranslator(context)
     private val gson = Gson()
 
-    private val client = OkHttpClient.Builder()
-        .connectTimeout(30, TimeUnit.SECONDS)
-        .readTimeout(60, TimeUnit.SECONDS)
-        .writeTimeout(30, TimeUnit.SECONDS)
-        .build()
+    private val client = HttpClientProvider.visionClient
 
     fun isMiMoConfigured(): Boolean = mimoTranslator.isConfigured()
 
@@ -100,8 +96,17 @@ class AiVisionPipeline(private val context: Context) {
     }
 
     private fun bitmapToBase64(bitmap: Bitmap): String {
+        // 限制最大尺寸为 1536px，避免高分辨率截图产生超大 base64 字符串
+        val maxDim = 1536
+        val source = if (bitmap.width > maxDim || bitmap.height > maxDim) {
+            val scale = maxDim.toFloat() / maxOf(bitmap.width, bitmap.height)
+            Bitmap.createScaledBitmap(bitmap, (bitmap.width * scale).toInt(), (bitmap.height * scale).toInt(), true)
+        } else {
+            bitmap
+        }
         val outputStream = ByteArrayOutputStream()
-        bitmap.compress(Bitmap.CompressFormat.JPEG, 85, outputStream)
+        source.compress(Bitmap.CompressFormat.JPEG, 85, outputStream)
+        if (source !== bitmap) source.recycle()
         val byteArray = outputStream.toByteArray()
         return Base64.encodeToString(byteArray, Base64.NO_WRAP)
     }

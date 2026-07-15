@@ -11,15 +11,16 @@ android {
         applicationId "com.manga.translator"
         minSdk 24
         targetSdk 34
-        versionCode 420
-        versionName "4.20"
+        versionCode 434
+        versionName "4.34"
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }
 
     buildTypes {
         release {
-            minifyEnabled false
+            minifyEnabled true
+            shrinkResources true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
     }
@@ -71,6 +72,9 @@ dependencies {
     
     // 屏幕截图
     implementation 'androidx.media:media:1.7.0'
+    
+    // 安全存储（API Key 加密）
+    implementation 'androidx.security:security-crypto:1.1.0-alpha06'
     
     // 测试
     testImplementation 'junit:junit:4.13.2'

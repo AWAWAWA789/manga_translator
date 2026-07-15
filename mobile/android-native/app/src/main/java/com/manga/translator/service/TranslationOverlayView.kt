@@ -101,6 +101,14 @@ class TranslationOverlayView(context: Context) : View(context) {
     
     var showMask = true
 
+    override fun onDetachedFromWindow() {
+        super.onDetachedFromWindow()
+        // View 被 remove 时取消所有动画，防止无效绘制
+        animate().cancel()
+        clearRunnable?.let { handler.removeCallbacks(it) }
+        clearRunnable = null
+    }
+
     fun setTranslations(newItems: List<TranslationItem>) {
         animate().cancel()
         clearRunnable?.let { handler.removeCallbacks(it) }
@@ -337,7 +345,8 @@ class TranslationOverlayView(context: Context) : View(context) {
 
         val step = if (verticalSource) box.width() * 0.45f else box.height() * 0.45f
         val candidates = mutableListOf(RectF(box))
-        for (i in 1..3) {
+        // 步长从 3 增加到 5，覆盖更拥挤的场景
+        for (i in 1..5) {
             val offset = step * i
             if (verticalSource) {
                 candidates.add(RectF(box).apply { offset(-offset, 0f) })
@@ -374,34 +383,48 @@ class TranslationOverlayView(context: Context) : View(context) {
     }
 
     private fun calculateFontSize(text: String, maxWidth: Int, maxHeight: Int): Float {
-        var textSize = MAX_HORIZONTAL_TEXT_SP * scaledDensity()
+        val maxSize = MAX_HORIZONTAL_TEXT_SP * scaledDensity()
         val minSize = MIN_TEXT_SP * scaledDensity()
-
-        while (textSize >= minSize) {
-            textPaint.textSize = textSize
-            val layout = createTextLayout(text, textSize, maxWidth)
+        // 二分查找替代线性 0.5sp 步长，将 StaticLayout 构建次数从 ~13 次降到 ~5 次
+        var lo = minSize
+        var hi = maxSize
+        var best = minSize
+        while (lo <= hi) {
+            val mid = (lo + hi) / 2f
+            textPaint.textSize = mid
+            val layout = createTextLayout(text, mid, maxWidth)
             val totalHeight = layout.height + 12f * density
-            if (totalHeight <= maxHeight || textSize <= minSize) return textSize
-            textSize -= 0.5f * scaledDensity()
+            if (totalHeight <= maxHeight) {
+                best = mid
+                lo = mid + 0.5f * scaledDensity()
+            } else {
+                hi = mid - 0.5f * scaledDensity()
+            }
         }
-
-        return minSize
+        return best
     }
 
     private fun calculateVerticalFontSize(text: String, maxWidth: Int, maxHeight: Int): Float {
-        var textSize = MAX_VERTICAL_TEXT_SP * scaledDensity()
+        val maxSize = MAX_VERTICAL_TEXT_SP * scaledDensity()
         val minSize = MIN_TEXT_SP * scaledDensity()
-
-        while (textSize >= minSize) {
-            val lineHeight = textSize * VERTICAL_LINE_HEIGHT
+        // 二分查找：找到最大的能放下的字号
+        var lo = minSize
+        var hi = maxSize
+        var best = minSize
+        while (lo <= hi) {
+            val mid = (lo + hi) / 2f
+            val lineHeight = mid * VERTICAL_LINE_HEIGHT
             val maxCharsPerCol = max(1, (maxHeight / lineHeight).toInt())
             val requiredColumns = (text.length + maxCharsPerCol - 1) / maxCharsPerCol
-            val maxColumns = max(1, (maxWidth / (textSize * VERTICAL_COLUMN_WIDTH)).toInt())
-            if (requiredColumns <= maxColumns) return textSize
-            textSize -= 0.5f * scaledDensity()
+            val maxColumns = max(1, (maxWidth / (mid * VERTICAL_COLUMN_WIDTH)).toInt())
+            if (requiredColumns <= maxColumns) {
+                best = mid
+                lo = mid + 0.5f * scaledDensity()
+            } else {
+                hi = mid - 0.5f * scaledDensity()
+            }
         }
-
-        return minSize
+        return best
     }
 
     private fun clampToScreen(rect: RectF): RectF? {
@@ -497,7 +520,9 @@ class TranslationOverlayView(context: Context) : View(context) {
 
     private fun compactTranslation(text: String): String {
         return text.trim()
-            .replace(Regex("\\s+"), "")
+            // 仅合并连续多空格为单空格，保留英文与中文之间的分隔
+            // 避免把 "OK 好的" 压成 "OK好的" 导致英文混排粘连
+            .replace(Regex("\\s{2,}"), " ")
             .replace("......", "……")
             .replace("...", "…")
     }

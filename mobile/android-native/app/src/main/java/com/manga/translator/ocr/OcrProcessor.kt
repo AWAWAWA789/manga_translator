@@ -13,6 +13,7 @@ import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.TextRecognizer
 import com.google.mlkit.vision.text.japanese.JapaneseTextRecognizerOptions
+import com.manga.translator.util.TextFilter
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -32,13 +33,10 @@ class OcrProcessor(private val context: Context) {
         private const val CROP_TOP_RATIO = 0.0f
         private const val CROP_BOTTOM_RATIO = 1.0f
 
-        // 应用UI文本黑名单（与 TextFilter 保持一致）
-        private val UI_TEXT_BLACKLIST = setOf(
-            "暂停翻译", "暂停翻真", "实时翻译", "手动翻译", "恢复翻译",
-            "横向模式", "竖向模式", "开始翻译", "停止翻译", "设置",
-            "翻译器", "漫画翻译", "正在运行", "翻译结果", "翻译中",
-            "截图", "截图中", "正在截图", "截图完成"
-        )
+        // OCR 专用线程池：6 遍识别全并行，避免横向/竖向串行等待
+        private val ocrExecutor = java.util.concurrent.Executors.newFixedThreadPool(6) { r ->
+            Thread(r, "OcrWorker").apply { isDaemon = true }
+        }
     }
 
     private val textRecognizer: TextRecognizer = TextRecognition.getClient(
@@ -65,34 +63,51 @@ class OcrProcessor(private val context: Context) {
         val binaryBitmap = binarizeForOcr(scaledBitmap)
 
         try {
-            val horizontalResults: List<OcrResult>
-            val verticalResults: List<OcrResult>
+            // 6 遍全并行策略：每个版本(enhanced/raw/binary) × 每个方向(0°/90°) 独立提交到线程池
+            // 相比旧的"横竖向并行但内部串行"，总耗时从 3×15s=45s 降至 max(15s)=15s
+            // 注意：ML Kit TextRecognizer 内部是线程安全的，可并发调用 process()
+            val futures = mutableListOf<CompletableFuture<List<OcrResult>>>()
 
-            if (verticalOnly) {
-                val enhancedVertical = recognizeWithRotation(enhancedBitmap, 90f, scaledBitmap.width, scaledBitmap.height)
-                val rawVertical = recognizeWithRotation(scaledBitmap, 90f, scaledBitmap.width, scaledBitmap.height)
-                val binaryVertical = recognizeWithRotation(binaryBitmap, 90f, scaledBitmap.width, scaledBitmap.height)
-                verticalResults = deduplicateResults(deduplicateResults(enhancedVertical, rawVertical), binaryVertical)
-                horizontalResults = emptyList()
-            } else {
-                val horizontalFuture = CompletableFuture.supplyAsync {
-                    val enhanced = recognizeWithRotation(enhancedBitmap, 0f, scaledBitmap.width, scaledBitmap.height)
-                    val raw = recognizeWithRotation(scaledBitmap, 0f, scaledBitmap.width, scaledBitmap.height)
-                    val binary = recognizeWithRotation(binaryBitmap, 0f, scaledBitmap.width, scaledBitmap.height)
-                    deduplicateResults(deduplicateResults(enhanced, raw), binary)
-                }
-                val verticalFuture = CompletableFuture.supplyAsync {
-                    val enhanced = recognizeWithRotation(enhancedBitmap, 90f, scaledBitmap.width, scaledBitmap.height)
-                    val raw = recognizeWithRotation(scaledBitmap, 90f, scaledBitmap.width, scaledBitmap.height)
-                    val binary = recognizeWithRotation(binaryBitmap, 90f, scaledBitmap.width, scaledBitmap.height)
-                    deduplicateResults(deduplicateResults(enhanced, raw), binary)
-                }
-                horizontalResults = horizontalFuture.get()
-                verticalResults = verticalFuture.get()
+            // 竖向版本（90° 旋转）
+            futures.add(CompletableFuture.supplyAsync({
+                recognizeWithRotation(enhancedBitmap, 90f, scaledBitmap.width, scaledBitmap.height)
+            }, ocrExecutor))
+            futures.add(CompletableFuture.supplyAsync({
+                recognizeWithRotation(scaledBitmap, 90f, scaledBitmap.width, scaledBitmap.height)
+            }, ocrExecutor))
+            futures.add(CompletableFuture.supplyAsync({
+                recognizeWithRotation(binaryBitmap, 90f, scaledBitmap.width, scaledBitmap.height)
+            }, ocrExecutor))
+
+            // 横向版本（0°）仅在非竖向模式时执行
+            if (!verticalOnly) {
+                futures.add(CompletableFuture.supplyAsync({
+                    recognizeWithRotation(enhancedBitmap, 0f, scaledBitmap.width, scaledBitmap.height)
+                }, ocrExecutor))
+                futures.add(CompletableFuture.supplyAsync({
+                    recognizeWithRotation(scaledBitmap, 0f, scaledBitmap.width, scaledBitmap.height)
+                }, ocrExecutor))
+                futures.add(CompletableFuture.supplyAsync({
+                    recognizeWithRotation(binaryBitmap, 0f, scaledBitmap.width, scaledBitmap.height)
+                }, ocrExecutor))
             }
-            Log.d(TAG, "横向识别: ${horizontalResults.size} 个，竖向识别: ${verticalResults.size} 个")
 
-            val allResults = deduplicateResults(horizontalResults, verticalResults)
+            // 等待全部完成，单遍最长 20s 超时
+            val results = futures.mapIndexed { idx, future ->
+                try {
+                    future.get(20, TimeUnit.SECONDS)
+                } catch (e: java.util.concurrent.TimeoutException) {
+                    Log.e(TAG, "OCR 第${idx + 1}遍超时")
+                    emptyList()
+                } catch (e: Exception) {
+                    Log.e(TAG, "OCR 第${idx + 1}遍异常: ${e.message}")
+                    emptyList()
+                }
+            }
+
+            // 逐层去重合并
+            val allResults = results.reduce { acc, list -> deduplicateResults(acc, list) }
+            Log.d(TAG, "方向合并后: ${allResults.size} 个")
 
             val scaleX = croppedBitmap.width.toFloat() / scaledBitmap.width.toFloat()
             val scaleY = croppedBitmap.height.toFloat() / scaledBitmap.height.toFloat()
@@ -110,7 +125,6 @@ class OcrProcessor(private val context: Context) {
             }
 
             Log.d(TAG, "最终结果: ${scaledResults.size} 个")
-            Log.d(TAG, "方向合并后: ${scaledResults.size} 个")
             return scaledResults
         } finally {
             if (enhancedBitmap !== scaledBitmap) try { enhancedBitmap.recycle() } catch (_: Exception) {}
@@ -170,23 +184,7 @@ class OcrProcessor(private val context: Context) {
     }
 
     private fun calculateSimilarity(s1: String, s2: String): Float {
-        if (s1.isEmpty() || s2.isEmpty()) return 0f
-        val maxLen = max(s1.length, s2.length)
-        val distance = levenshteinDistance(s1, s2)
-        return 1f - (distance.toFloat() / maxLen)
-    }
-
-    private fun levenshteinDistance(s1: String, s2: String): Int {
-        val dp = Array(s1.length + 1) { IntArray(s2.length + 1) }
-        for (i in 0..s1.length) dp[i][0] = i
-        for (j in 0..s2.length) dp[0][j] = j
-        for (i in 1..s1.length) {
-            for (j in 1..s2.length) {
-                val cost = if (s1[i - 1] == s2[j - 1]) 0 else 1
-                dp[i][j] = minOf(dp[i - 1][j] + 1, dp[i][j - 1] + 1, dp[i - 1][j - 1] + cost)
-            }
-        }
-        return dp[s1.length][s2.length]
+        return com.manga.translator.util.StringUtils.similarity(s1, s2)
     }
 
     private fun ensureMinSize(bitmap: Bitmap, minSize: Int): Bitmap {
@@ -260,21 +258,28 @@ class OcrProcessor(private val context: Context) {
     }
 
     private fun recognizeWithRotation(bitmap: Bitmap, degrees: Float, origWidth: Int, origHeight: Int): List<OcrResult> {
-        if (degrees == 0f) return recognizeBitmap(bitmap, origWidth, origHeight, 0f)
+        if (degrees == 0f) {
+            // 0度不需要创建副本，bitmap 由调用方管理
+            val (results, _) = recognizeBitmap(bitmap, origWidth, origHeight, 0f)
+            return results
+        }
         val matrix = Matrix().apply { postRotate(degrees) }
         val rotatedBitmap = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
-        val results = recognizeBitmap(rotatedBitmap, origWidth, origHeight, degrees)
-        rotatedBitmap.recycle()
+        val (results, completed) = recognizeBitmap(rotatedBitmap, origWidth, origHeight, degrees)
+        // 仅在回调已完成时回收，超时则由 GC 处理，避免 ML Kit 仍在访问已回收的 Bitmap
+        if (completed) rotatedBitmap.recycle()
         return results
     }
 
-    private fun recognizeBitmap(bitmap: Bitmap, origWidth: Int, origHeight: Int, degrees: Float): List<OcrResult> {
+    private fun recognizeBitmap(bitmap: Bitmap, origWidth: Int, origHeight: Int, degrees: Float): Pair<List<OcrResult>, Boolean> {
         val results = mutableListOf<OcrResult>()
         val latch = CountDownLatch(1)
+        val completed = java.util.concurrent.atomic.AtomicBoolean(false)
         val image = InputImage.fromBitmap(bitmap, 0)
 
         textRecognizer.process(image)
             .addOnSuccessListener { visionText ->
+                completed.set(true)
                 for (block in visionText.textBlocks) {
                     val lines = block.lines
                     if (lines.isEmpty()) continue
@@ -341,12 +346,13 @@ class OcrProcessor(private val context: Context) {
                 latch.countDown()
             }
             .addOnFailureListener { e ->
+                completed.set(true)
                 Log.e(TAG, "OCR失败: ${e.message}")
                 latch.countDown()
             }
 
         latch.await(TIMEOUT_SECONDS, TimeUnit.SECONDS)
-        return results
+        return Pair(results, completed.get())
     }
 
     private fun mapRectBack(rect: Rect?, rotWidth: Int, rotHeight: Int, origWidth: Int, origHeight: Int, degrees: Float): Rect? {
@@ -370,23 +376,11 @@ class OcrProcessor(private val context: Context) {
     }
 
     private fun isAppUiText(text: String): Boolean {
-        if (UI_TEXT_BLACKLIST.contains(text)) return true
-        val keywords = listOf("暂停", "翻译", "实时", "手动", "模式", "开始", "停止", "设置")
-        for (keyword in keywords) {
-            if (text.contains(keyword) && isPureChinese(text) && text.length <= 6) return true
-        }
-        return false
+        return TextFilter.isAppUiText(text)
     }
 
     private fun isPureChinese(text: String): Boolean {
-        var hasKanji = false
-        var hasKana = false
-        for (char in text) {
-            val code = char.code
-            if (code in 0x3040..0x309F || code in 0x30A0..0x30FF) hasKana = true
-            if (code in 0x4E00..0x9FFF) hasKanji = true
-        }
-        return hasKanji && !hasKana
+        return TextFilter.isPureChinese(text)
     }
 
     fun close() {

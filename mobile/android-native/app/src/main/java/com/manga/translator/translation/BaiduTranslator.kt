@@ -7,6 +7,9 @@ import com.google.gson.Gson
 import com.google.gson.annotations.SerializedName
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import com.manga.translator.util.SecurePrefs
+import com.manga.translator.util.HttpClientProvider
+import okhttp3.FormBody
 import java.security.MessageDigest
 import java.util.Random
 import java.util.concurrent.TimeUnit
@@ -18,17 +21,14 @@ class BaiduTranslator(private val context: Context) {
         private const val PREFS_NAME = "translation_config"
         private const val KEY_APP_ID = "baidu_app_id"
         private const val KEY_SECRET_KEY = "baidu_secret_key"
+        // 共享 Random 实例，避免每次调用创建新对象
+        private val random = Random()
     }
     
-    private val preferences: SharedPreferences = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    private val preferences: SharedPreferences = SecurePrefs.get(context)
     private val gson = Gson()
     
-    private val client = OkHttpClient.Builder()
-        .connectTimeout(10, TimeUnit.SECONDS)
-        .readTimeout(30, TimeUnit.SECONDS)
-        .writeTimeout(10, TimeUnit.SECONDS)
-        .retryOnConnectionFailure(true)
-        .build()
+    private val client = HttpClientProvider.textClient
     
     data class TranslateResponse(
         @SerializedName("from") val from: String?,
@@ -99,36 +99,38 @@ class BaiduTranslator(private val context: Context) {
     }
     
     private fun callBaiduApi(text: String, appId: String, secretKey: String): String {
-        val salt = (10000 + Random().nextInt(89999)).toString()
+        val salt = (10000 + random.nextInt(89999)).toString()
         val sign = generateSign(appId, text, salt, secretKey)
-        
-        val url = "https://fanyi-api.baidu.com/api/trans/vip/translate?" +
-            "q=${java.net.URLEncoder.encode(text, "UTF-8")}" +
-            "&from=jp" +
-            "&to=zh" +
-            "&appid=$appId" +
-            "&salt=$salt" +
-            "&sign=$sign"
-        
-        val request = Request.Builder()
-            .url(url)
-            .get()
-            .addHeader("Content-Type", "application/json")
+
+        // 使用 POST 表单提交，避免长文本导致 URL 超过长度限制（一般 2KB-8KB）
+        val formBody = FormBody.Builder()
+            .add("q", text)
+            .add("from", "jp")
+            .add("to", "zh")
+            .add("appid", appId)
+            .add("salt", salt)
+            .add("sign", sign)
             .build()
-        
+
+        val request = Request.Builder()
+            .url("https://fanyi-api.baidu.com/api/trans/vip/translate")
+            .post(formBody)
+            .addHeader("Content-Type", "application/x-www-form-urlencoded")
+            .build()
+
         val response = client.newCall(request).execute()
         val responseBody = response.body?.string() ?: throw Exception("响应为空")
-        
+
         if (!response.isSuccessful) {
             throw Exception("HTTP错误: ${response.code}")
         }
-        
+
         val result = gson.fromJson(responseBody, TranslateResponse::class.java)
-        
+
         if (result.errorCode != null) {
             throw Exception("百度错误: ${result.errorCode} - ${result.errorMsg}")
         }
-        
+
         return result.transResult?.firstOrNull()?.dst ?: throw Exception("翻译结果为空")
     }
     

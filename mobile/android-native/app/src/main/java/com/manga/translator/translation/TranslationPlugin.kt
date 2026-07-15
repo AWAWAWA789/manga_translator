@@ -3,6 +3,7 @@ package com.manga.translator.translation
 import android.content.Context
 import android.content.SharedPreferences
 import android.util.Log
+import android.util.LruCache
 
 class TranslationPlugin(private val context: Context) {
     
@@ -16,7 +17,7 @@ class TranslationPlugin(private val context: Context) {
     private val preferences: SharedPreferences = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
     private val baiduTranslator = BaiduTranslator(context)
     private val mimoTranslator = MimoTranslator(context)
-    private val translationCache = java.util.concurrent.ConcurrentHashMap<String, String>()
+    private val translationCache = LruCache<String, String>(MAX_CACHE_SIZE)
     
     fun isConfigured(): Boolean {
         return baiduTranslator.isConfigured() || mimoTranslator.isConfigured()
@@ -38,7 +39,7 @@ class TranslationPlugin(private val context: Context) {
     }
     
     fun translate(text: String): String {
-        translationCache[text]?.let {
+        translationCache.get(text)?.let {
             Log.d(TAG, "命中缓存")
             return it
         }
@@ -59,7 +60,8 @@ class TranslationPlugin(private val context: Context) {
             val translated = doTranslateBatch(texts)
             val finalTranslated = if (translated.all { it.startsWith("翻译失败") } && baiduTranslator.isConfigured()) {
                 Log.d(TAG, "MiMo批量失败，回退百度翻译")
-                texts.map { baiduTranslator.translate(it) }
+                // 走 translate() 复用缓存，避免对已缓存的文本重复请求
+                texts.map { translate(it) }
             } else {
                 translated
             }
@@ -80,7 +82,7 @@ class TranslationPlugin(private val context: Context) {
         val pendingIndices = mutableListOf<Int>()
 
         for (i in texts.indices) {
-            val cached = translationCache[texts[i]]
+            val cached = translationCache.get(texts[i])
             if (cached != null) {
                 results[i] = cached
             } else {
@@ -123,7 +125,8 @@ class TranslationPlugin(private val context: Context) {
             Log.d(TAG, "翻译质量异常 ${badIndices.size} 条，回退逐条翻译")
             for (i in badIndices) {
                 val original = originals[i]
-                val fallback = baiduTranslator.translate(original)
+                // 走 translate() 而非 baiduTranslator.translate()，以复用 LRU 缓存
+                val fallback = translate(original)
                 if (fallback.isNotEmpty() && !fallback.startsWith("翻译失败") && !hasRepeatedPattern(fallback)) {
                     results[i] = fallback
                 }
@@ -215,16 +218,10 @@ class TranslationPlugin(private val context: Context) {
     fun getMimoTranslator(): MimoTranslator = mimoTranslator
     
     fun clearCache() {
-        translationCache.clear()
+        translationCache.evictAll()
     }
     
     private fun putCache(key: String, value: String) {
-        if (translationCache.size >= MAX_CACHE_SIZE) {
-            val oldest = translationCache.keys.firstOrNull()
-            if (oldest != null) {
-                translationCache.remove(oldest)
-            }
-        }
-        translationCache[key] = value
+        translationCache.put(key, value)
     }
 }

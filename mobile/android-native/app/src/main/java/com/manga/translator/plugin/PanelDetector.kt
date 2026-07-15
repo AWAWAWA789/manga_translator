@@ -29,25 +29,24 @@ class PanelDetector {
     fun detectPanels(bitmap: Bitmap): List<PanelInfo> {
         Log.d(TAG, "开始分镜检测: ${bitmap.width}x${bitmap.height}")
 
+        val rgbaMat = Mat()
+        val grayMat = Mat()
+        val binaryMat = Mat()
+        val closedMat = Mat()
+        val hierarchy = Mat()
+        val contours = mutableListOf<MatOfPoint>()
+        var kernel: Mat? = null
+
         try {
-            val rgbaMat = Mat()
             Utils.bitmapToMat(bitmap, rgbaMat)
-
-            val grayMat = Mat()
             Imgproc.cvtColor(rgbaMat, grayMat, Imgproc.COLOR_RGBA2GRAY)
-
-            val binaryMat = Mat()
             Imgproc.threshold(grayMat, binaryMat, BORDER_THRESHOLD, 255.0, Imgproc.THRESH_BINARY_INV)
-
-            val kernel = Imgproc.getStructuringElement(
+            kernel = Imgproc.getStructuringElement(
                 Imgproc.MORPH_RECT,
                 Size(MORPH_KERNEL_SIZE, MORPH_KERNEL_SIZE)
             )
-            val closedMat = Mat()
             Imgproc.morphologyEx(binaryMat, closedMat, Imgproc.MORPH_CLOSE, kernel, org.opencv.core.Point(-1.0, -1.0), 2)
 
-            val contours = mutableListOf<MatOfPoint>()
-            val hierarchy = Mat()
             Imgproc.findContours(
                 closedMat,
                 contours,
@@ -60,19 +59,23 @@ class PanelDetector {
 
             val panels = filterPanels(contours, bitmap.width, bitmap.height)
 
-            rgbaMat.release()
-            grayMat.release()
-            binaryMat.release()
-            closedMat.release()
-            kernel.release()
-            hierarchy.release()
-
             Log.d(TAG, "筛选后 ${panels.size} 个分镜")
             return panels
 
         } catch (e: Exception) {
             Log.e(TAG, "分镜检测失败: ${e.message}")
             return emptyList()
+        } finally {
+            // 统一在 finally 中释放所有 native 资源
+            rgbaMat.release()
+            grayMat.release()
+            binaryMat.release()
+            closedMat.release()
+            kernel?.release()
+            hierarchy.release()
+            for (contour in contours) {
+                contour.release()
+            }
         }
     }
 
