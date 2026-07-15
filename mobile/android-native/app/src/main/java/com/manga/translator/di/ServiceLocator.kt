@@ -9,6 +9,7 @@ import com.manga.translator.plugin.OcrPlugin
 import com.manga.translator.plugin.PanelDetector
 import com.manga.translator.plugin.PluginManager
 import com.manga.translator.plugin.SentenceAssembler
+import com.manga.translator.presentation.TranslationController
 import com.manga.translator.translation.BaiduTranslator
 import com.manga.translator.translation.MimoTranslator
 import com.manga.translator.translation.TranslationPlugin
@@ -57,8 +58,25 @@ object ServiceLocator {
      * 创建 PluginManager 实例。
      * PluginManager 持有可变状态且与 Service 生命周期绑定，不作为单例。
      * 调用方负责在 Service 销毁时调用 [PluginManager.close]。
+     *
+     * @deprecated 使用 [createTranslationController] 替代，本方法将在任务 2.8 随 PluginManager 移除。
      */
+    @Deprecated("使用 createTranslationController 替代", ReplaceWith("createTranslationController()"))
     fun createPluginManager(): PluginManager = PluginManager(requireContext())
+
+    /**
+     * 创建 TranslationController 实例（presentation 层）。
+     *
+     * 内部创建 PluginManager（过渡期 Repository 实现）并包装为 Controller。
+     * Service 通过 Controller 调用翻译流程，不直接接触 PluginManager。
+     *
+     * 调用方负责在 Service 销毁时调用 [TranslationController.close]。
+     */
+    fun createTranslationController(): TranslationController {
+        @Suppress("DEPRECATION")
+        val repository = PluginManager(requireContext())
+        return TranslationController(repository)
+    }
 
     /**
      * 创建 OcrProcessor 实例。

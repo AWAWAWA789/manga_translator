@@ -7,6 +7,7 @@ import android.util.Log
 import com.manga.translator.debug.DebugOverlayData
 import com.manga.translator.domain.detection.BubbleInfo
 import com.manga.translator.domain.detection.PanelInfo
+import com.manga.translator.domain.translation.TranslationRepository
 import com.manga.translator.model.OcrBlock
 import com.manga.translator.model.TranslationCard
 import com.manga.translator.translation.TranslationPlugin
@@ -16,7 +17,21 @@ import com.manga.translator.util.ScreenCropConfig
 import com.manga.translator.util.TextFilter
 import kotlin.math.abs
 
-class PluginManager(private val context: Context) {
+/**
+ * 插件管理器（旧编排层）。
+ *
+ * 历史职责：组合 OCR + 翻译 + 检测，编排翻译流程，管理状态（cropConfig、lastDebugData 等）。
+ *
+ * 架构演进（阶段2）：
+ * - 已实现 [TranslationRepository] 接口，作为 data 层翻译仓储的过渡实现
+ * - presentation 层应通过 [com.manga.translator.presentation.TranslationController] 调用，
+ *   不再直接使用本类
+ * - 后续任务 2.8 将删除本类，业务逻辑迁移到 TranslationRepository 的正式实现
+ *
+ * @deprecated 使用 [com.manga.translator.presentation.TranslationController] 替代。
+ */
+@Deprecated("使用 TranslationController 替代，本类将在任务 2.8 移除", ReplaceWith("TranslationController"))
+class PluginManager(private val context: Context) : TranslationRepository {
 
     companion object {
         private const val TAG = "PluginManager"
@@ -55,7 +70,7 @@ class PluginManager(private val context: Context) {
 
     @Volatile private var useAiVisionMode = false
 
-    fun initialize() {
+    override fun initialize() {
         if (isInitialized) return
 
         ocrPlugin.initialize()
@@ -544,7 +559,7 @@ class PluginManager(private val context: Context) {
         translationPlugin.clearCache()
     }
 
-    fun close() {
+    override fun close() {
         // 未初始化则无需关闭，避免重复释放
         if (!isInitialized) return
         // 依次关闭各子插件，确保翻译/AI/OCR 资源均被释放
@@ -552,5 +567,31 @@ class PluginManager(private val context: Context) {
         aiVisionPipeline.close()
         ocrPlugin.close()
         isInitialized = false
+    }
+
+    /**
+     * [TranslationRepository] 接口实现：基于参数执行翻译，返回卡片 + 调试数据。
+     *
+     * 与 [translateImage] 的区别：
+     * - translateImage 依赖实例状态（cropConfig、useAiVisionMode、lastDebugData），供旧调用方使用
+     * - translate 从 params 读取配置，结果通过返回值透出，无状态副作用（除 lastDebugData 仍被更新以兼容旧调用方）
+     *
+     * 过渡期：translate 内部调用 translateImage 并读取更新后的 lastDebugData 作为返回。
+     */
+    override fun translate(params: TranslationRepository.TranslateParams): TranslationRepository.TranslateResult {
+        // 同步实例状态到 params 指定值，保证 translateImage 使用最新配置
+        cropConfig = params.cropConfig
+        useAiVisionMode = params.useAiVisionMode
+
+        val cards = translateImage(
+            bitmap = params.bitmap,
+            lastTranslationRects = params.lastTranslationRects,
+            verticalOnly = params.verticalOnly,
+            isManual = params.isManual,
+        )
+        return TranslationRepository.TranslateResult(
+            cards = cards,
+            debugData = lastDebugData,
+        )
     }
 }

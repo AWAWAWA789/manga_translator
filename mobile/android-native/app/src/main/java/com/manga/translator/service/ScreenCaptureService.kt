@@ -29,7 +29,7 @@ import com.manga.translator.R
 import com.manga.translator.di.ServiceLocator
 import com.manga.translator.model.TranslationCard
 import com.manga.translator.ocr.OcrProcessor
-import com.manga.translator.plugin.PluginManager
+import com.manga.translator.presentation.TranslationController
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -67,7 +67,7 @@ class ScreenCaptureService : Service() {
     private var scaleFactorY = 1.0f // Y 方向独立缩放因子（screenHeight 可能被 clamp 到 1920）
 
     private var ocrProcessor: OcrProcessor? = null
-    private var pluginManager: PluginManager? = null
+    private var pluginManager: TranslationController? = null
     private var handler: Handler? = null
 
     // 后台 HandlerThread：帧监听器的 Bitmap 转换在后台线程执行，避免阻塞主线程
@@ -214,7 +214,7 @@ class ScreenCaptureService : Service() {
         try {
             getScreenMetrics()
             ocrProcessor = ServiceLocator.createOcrProcessor()
-            pluginManager = ServiceLocator.createPluginManager().apply {
+            pluginManager = ServiceLocator.createTranslationController().apply {
                 initialize()
                 val preferences = getSharedPreferences("translation_config", MODE_PRIVATE)
                 val aiBubbleEnabled = preferences.getBoolean("ai_bubble_detection", false)

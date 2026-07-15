@@ -8,7 +8,7 @@
     <ID>CyclomaticComplexMethod:OcrProcessor.kt$OcrProcessor$private fun recognizeBitmap( bitmap: Bitmap, rectBitmapWidth: Int, rectBitmapHeight: Int, origWidth: Int, origHeight: Int, degrees: Float, ): List&lt;OcrResult&gt;</ID>
     <ID>LargeClass:FloatingWindowService.kt$FloatingWindowService : Service</ID>
     <ID>LargeClass:OcrProcessor.kt$OcrProcessor</ID>
-    <ID>LargeClass:PluginManager.kt$PluginManager</ID>
+    <ID>LargeClass:PluginManager.kt$PluginManager : TranslationRepository</ID>
     <ID>LargeClass:ScreenCaptureService.kt$ScreenCaptureService : Service</ID>
     <ID>LargeClass:TranslationOverlayView.kt$TranslationOverlayView : View</ID>
     <ID>LoopWithTooManyJumpStatements:BubbleDetector.kt$BubbleDetector$for</ID>
