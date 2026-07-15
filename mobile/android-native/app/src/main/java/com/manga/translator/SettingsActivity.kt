@@ -10,6 +10,7 @@ import androidx.lifecycle.lifecycleScope
 import com.manga.translator.databinding.ActivitySettingsBinding
 import com.manga.translator.translation.TranslationPlugin
 import com.manga.translator.translation.TranslatorType
+import com.manga.translator.util.SecurePrefs
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -116,7 +117,11 @@ class SettingsActivity : AppCompatActivity() {
 
         translationPlugin.getBaiduTranslator().setConfig(appId, secretKey)
         updateTranslatorStatus()
-        Toast.makeText(this, "百度配置已保存", Toast.LENGTH_SHORT).show()
+        if (SecurePrefs.isEncryptionFailed(this)) {
+            Toast.makeText(this, "警告：加密存储初始化失败，API Key 将以明文保存", Toast.LENGTH_LONG).show()
+        } else {
+            Toast.makeText(this, "百度配置已保存", Toast.LENGTH_SHORT).show()
+        }
     }
 
     private fun saveMimoConfig() {
@@ -134,7 +139,11 @@ class SettingsActivity : AppCompatActivity() {
 
         translationPlugin.getMimoTranslator().setConfig(apiKey, finalBaseUrl, finalModel)
         updateTranslatorStatus()
-        Toast.makeText(this, "MiMo配置已保存", Toast.LENGTH_SHORT).show()
+        if (SecurePrefs.isEncryptionFailed(this)) {
+            Toast.makeText(this, "警告：加密存储初始化失败，API Key 将以明文保存", Toast.LENGTH_LONG).show()
+        } else {
+            Toast.makeText(this, "MiMo配置已保存", Toast.LENGTH_SHORT).show()
+        }
     }
 
     private fun saveDefaultTranslator() {
