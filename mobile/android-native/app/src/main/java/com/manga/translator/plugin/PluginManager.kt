@@ -5,6 +5,8 @@ import android.graphics.Bitmap
 import android.graphics.Rect
 import android.util.Log
 import com.manga.translator.debug.DebugOverlayData
+import com.manga.translator.domain.detection.BubbleInfo
+import com.manga.translator.domain.detection.PanelInfo
 import com.manga.translator.model.OcrBlock
 import com.manga.translator.model.TranslationCard
 import com.manga.translator.translation.TranslationPlugin
@@ -190,8 +192,8 @@ class PluginManager(private val context: Context) {
     }
 
     private fun translateCore(
-        panels: List<PanelDetector.PanelInfo>,
-        bubbles: List<BubbleDetector.BubbleInfo>,
+        panels: List<PanelInfo>,
+        bubbles: List<BubbleInfo>,
         ocrBlocks: List<OcrBlock>,
         bitmap: Bitmap,
     ): List<TranslationCard> {
@@ -239,8 +241,8 @@ class PluginManager(private val context: Context) {
 
     private fun buildSentenceFirstRegions(
         ocrBlocks: List<OcrBlock>,
-        panels: List<PanelDetector.PanelInfo>,
-        bubbles: List<BubbleDetector.BubbleInfo>,
+        panels: List<PanelInfo>,
+        bubbles: List<BubbleInfo>,
         bitmap: Bitmap,
     ): List<TextRegion> {
         val blocks = dedupeBlocksInBubble(ocrBlocks)
@@ -279,7 +281,7 @@ class PluginManager(private val context: Context) {
         return bounds
     }
 
-    private fun findTrustedBubbleForSentence(bubbles: List<BubbleDetector.BubbleInfo>, textRect: Rect): Rect? {
+    private fun findTrustedBubbleForSentence(bubbles: List<BubbleInfo>, textRect: Rect): Rect? {
         if (bubbles.isEmpty()) return null
         val best = bubbles.maxByOrNull { bubble -> trustedBubbleScore(bubble.rect, textRect) } ?: return null
         val score = trustedBubbleScore(best.rect, textRect)

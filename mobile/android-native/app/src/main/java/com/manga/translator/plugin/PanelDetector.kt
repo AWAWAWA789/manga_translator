@@ -3,13 +3,15 @@ package com.manga.translator.plugin
 import android.graphics.Bitmap
 import android.graphics.Rect
 import android.util.Log
+import com.manga.translator.domain.detection.PanelInfo
 import org.opencv.android.Utils
 import org.opencv.core.Mat
 import org.opencv.core.MatOfPoint
 import org.opencv.core.Size
 import org.opencv.imgproc.Imgproc
+import com.manga.translator.domain.detection.PanelDetector as PanelDetectorInterface
 
-class PanelDetector {
+class PanelDetector : PanelDetectorInterface {
 
     companion object {
         private const val TAG = "PanelDetector"
@@ -21,12 +23,7 @@ class PanelDetector {
         private const val MORPH_KERNEL_SIZE = 5.0
     }
 
-    data class PanelInfo(
-        val rect: Rect,
-        val area: Long,
-    )
-
-    fun detectPanels(bitmap: Bitmap): List<PanelInfo> {
+    override fun detectPanels(bitmap: Bitmap): List<PanelInfo> {
         Log.d(TAG, "开始分镜检测: ${bitmap.width}x${bitmap.height}")
 
         val rgbaMat = Mat()
@@ -134,7 +131,7 @@ class PanelDetector {
         return overlapArea / unionArea
     }
 
-    fun findPanelForRect(panels: List<PanelInfo>, rect: Rect): PanelInfo? {
+    override fun findPanelForRect(panels: List<PanelInfo>, rect: Rect): PanelInfo? {
         var bestPanel: PanelInfo? = null
         var bestOverlap = 0L
 

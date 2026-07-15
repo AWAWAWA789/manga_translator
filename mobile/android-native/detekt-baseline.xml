@@ -49,7 +49,7 @@
     <ID>TooGenericExceptionThrown:ScreenCaptureService.kt$ScreenCaptureService$throw Exception("MediaProjection为null")</ID>
     <ID>TooGenericExceptionThrown:ScreenCaptureService.kt$ScreenCaptureService$throw Exception("VirtualDisplay为null")</ID>
     <ID>UnusedParameter:OpenCVHelper.kt$OpenCVHelper$context: Context</ID>
-    <ID>UnusedParameter:PluginManager.kt$PluginManager$panels: List&lt;PanelDetector.PanelInfo&gt;</ID>
+    <ID>UnusedParameter:PluginManager.kt$PluginManager$panels: List&lt;PanelInfo&gt;</ID>
     <ID>UnusedPrivateMember:FloatingWindowService.kt$FloatingWindowService$private fun addTranslationOverlays(results: List&lt;TranslationCard&gt;)</ID>
     <ID>UnusedPrivateProperty:BaiduTranslator.kt$BaiduTranslator.Companion$private const val PREFS_NAME = "translation_config"</ID>
     <ID>UnusedPrivateProperty:OcrProcessor.kt$OcrProcessor$private val context: Context</ID>

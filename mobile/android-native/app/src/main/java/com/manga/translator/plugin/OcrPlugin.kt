@@ -3,10 +3,11 @@ package com.manga.translator.plugin
 import android.content.Context
 import android.graphics.Bitmap
 import android.util.Log
+import com.manga.translator.domain.ocr.OcrEngine
 import com.manga.translator.model.OcrBlock
 import com.manga.translator.ocr.OcrProcessor
 
-class OcrPlugin(private val context: Context) {
+class OcrPlugin(private val context: Context) : OcrEngine {
 
     companion object {
         private const val TAG = "OcrPlugin"
@@ -19,7 +20,7 @@ class OcrPlugin(private val context: Context) {
         Log.d(TAG, "OCR插件初始化完成")
     }
 
-    fun recognize(bitmap: Bitmap, verticalOnly: Boolean = false): List<OcrBlock> {
+    override fun recognize(bitmap: Bitmap, verticalOnly: Boolean): List<OcrBlock> {
         val processor = ocrProcessor ?: run {
             Log.e(TAG, "OCR插件未初始化")
             return emptyList()
@@ -45,7 +46,7 @@ class OcrPlugin(private val context: Context) {
         return blocks
     }
 
-    fun close() {
+    override fun close() {
         ocrProcessor?.close()
         ocrProcessor = null
     }

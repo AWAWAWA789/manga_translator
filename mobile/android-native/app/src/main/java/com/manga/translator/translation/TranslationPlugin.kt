@@ -4,8 +4,9 @@ import android.content.Context
 import android.content.SharedPreferences
 import android.util.Log
 import android.util.LruCache
+import com.manga.translator.domain.translation.Translator
 
-class TranslationPlugin(private val context: Context) {
+class TranslationPlugin(private val context: Context) : Translator {
 
     companion object {
         private const val TAG = "TranslationPlugin"
@@ -41,7 +42,7 @@ class TranslationPlugin(private val context: Context) {
     private val mimoTranslator = MimoTranslator(context)
     private val translationCache = LruCache<String, String>(MAX_CACHE_SIZE)
 
-    fun isConfigured(): Boolean {
+    override fun isConfigured(): Boolean {
         return baiduTranslator.isConfigured() || mimoTranslator.isConfigured()
     }
 
@@ -60,7 +61,7 @@ class TranslationPlugin(private val context: Context) {
             .apply()
     }
 
-    fun translate(text: String): String {
+    override fun translate(text: String): String {
         translationCache.get(text)?.let {
             Log.d(TAG, "命中缓存")
             return it
@@ -75,7 +76,7 @@ class TranslationPlugin(private val context: Context) {
         return result
     }
 
-    fun translateBatch(texts: List<String>): List<String> {
+    override fun translateBatch(texts: List<String>): List<String> {
         if (texts.isEmpty()) return emptyList()
         return if (shouldUseMimo()) {
             translateBatchMimo(texts)

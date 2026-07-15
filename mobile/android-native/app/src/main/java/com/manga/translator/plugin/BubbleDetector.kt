@@ -3,14 +3,16 @@ package com.manga.translator.plugin
 import android.graphics.Bitmap
 import android.graphics.Rect
 import android.util.Log
+import com.manga.translator.domain.detection.BubbleInfo
 import org.opencv.android.Utils
 import org.opencv.core.Mat
 import org.opencv.core.MatOfInt
 import org.opencv.core.MatOfPoint
 import org.opencv.core.Size
 import org.opencv.imgproc.Imgproc
+import com.manga.translator.domain.detection.BubbleDetector as BubbleDetectorInterface
 
-class BubbleDetector {
+class BubbleDetector : BubbleDetectorInterface {
 
     companion object {
         private const val TAG = "BubbleDetector"
@@ -35,15 +37,7 @@ class BubbleDetector {
         private const val MIN_SOLIDITY = 0.3
     }
 
-    data class BubbleInfo(
-        val rect: Rect,
-        val area: Double,
-        val centerX: Int,
-        val centerY: Int,
-        val isVertical: Boolean,
-    )
-
-    fun detectBubbles(bitmap: Bitmap): List<BubbleInfo> {
+    override fun detectBubbles(bitmap: Bitmap): List<BubbleInfo> {
         Log.d(TAG, "开始气泡检测，图片尺寸: ${bitmap.width}x${bitmap.height}")
 
         val rgbaMat = Mat()
