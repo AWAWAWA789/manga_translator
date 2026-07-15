@@ -39,6 +39,9 @@ jobs:
           key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
           restore-keys: gradle-${{ runner.os }}-
 
+      - name: Ensure gradlew executable
+        run: chmod +x ./gradlew
+
       - name: Assemble Debug
         run: ./gradlew assembleDebug --no-daemon
 
