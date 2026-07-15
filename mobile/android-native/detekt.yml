@@ -47,8 +47,8 @@ exceptions:
       - NullPointerException
       - RuntimeException
       - Throwable
-    # 允许惯用异常变量名：e（Kotlin 官方示例惯用）、_（不使用变量）、ignore/expected（显式标注）
-    allowedExceptionNameRegex: '^(_|e|ignore|expected).*'
+    # 允许惯用异常变量名：e/_（Kotlin 官方惯用）、ioe/npe（具体异常缩写）、ex（通用缩写）、ignore/expected（显式标注）
+    allowedExceptionNameRegex: '^(_|e|ioe|npe|ex|ignore|expected).*'
   TooGenericExceptionThrown:
     active: true
 

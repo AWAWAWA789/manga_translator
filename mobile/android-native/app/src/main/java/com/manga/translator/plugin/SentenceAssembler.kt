@@ -4,6 +4,7 @@ import android.graphics.Rect
 import com.manga.translator.model.OcrBlock
 import kotlin.math.abs
 
+@Suppress("TooManyFunctions") // 句子组装类按竖向/横向/合并判断拆分，函数数多是合理的
 class SentenceAssembler {
 
     fun assemble(blocks: List<OcrBlock>): List<List<OcrBlock>> {
