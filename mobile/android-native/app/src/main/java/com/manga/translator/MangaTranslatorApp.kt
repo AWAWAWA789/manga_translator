@@ -6,6 +6,9 @@ import android.app.NotificationManager
 import android.util.Log
 import com.manga.translator.debug.DebugManager
 import com.manga.translator.service.ScreenCaptureService
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 
 /**
  * 自定义 Application。
@@ -13,13 +16,23 @@ import com.manga.translator.service.ScreenCaptureService
  * 职责：
  * 1. 提前初始化 DebugManager，避免 ScreenCaptureService 因 START_STICKY 被系统重建时
  *    先于 MainActivity 访问 DebugManager 导致 lateinit 崩溃。
- * 2. 提前创建前台服务通知渠道，避免 ScreenCaptureService.startForeground 时
+ * 2. 提前创建前台服务通知渠道，避免 Service.startForeground 时
  *    首次创建渠道失败导致前台服务启动失败。
+ * 3. 提供全局 [appScope] 协程作用域，用于不绑定到特定组件（Service/Activity）的
+ *    顶级协程任务；子作用域（如 Service 的 serviceScope）应自行管理生命周期，
+ *    不要使用本作用域，避免 Service 销毁后协程仍在运行。
  */
 class MangaTranslatorApp : Application() {
 
     companion object {
         private const val TAG = "MangaTranslator"
+
+        /**
+         * 应用级协程作用域：SupervisorJob 确保子协程异常不会互相取消；
+         * Dispatchers.Default 适用于 CPU 密集与轻量 IO，阻塞 IO 应使用 Dispatchers.IO。
+         * 生命周期与 Application 相同，进程退出时自动回收。
+         */
+        val appScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     }
 
     override fun onCreate() {

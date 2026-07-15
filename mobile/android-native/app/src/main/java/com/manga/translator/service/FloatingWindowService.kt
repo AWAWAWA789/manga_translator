@@ -21,6 +21,10 @@ import android.widget.TextView
 import com.manga.translator.debug.DebugOverlayConfig
 import com.manga.translator.debug.DebugOverlayData
 import com.manga.translator.model.TranslationCard
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlin.math.abs
 
 class FloatingWindowService : Service() {
@@ -135,6 +139,13 @@ class FloatingWindowService : Service() {
     private var longPressRunnable: Runnable? = null
     private var longPressTriggered = false
 
+    /**
+     * Service 协程作用域：SupervisorJob 防止子协程异常相互取消，Dispatchers.Main 用于 UI 操作。
+     * onDestroy 中 cancel()，所有子协程自动取消，避免 Service 销毁后协程泄漏。
+     * 后续任务 2.6 将把 Handler.post 替换为 serviceScope.launch。
+     */
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+
     override fun onCreate() {
         super.onCreate()
         handler = Handler(Looper.getMainLooper())
@@ -145,6 +156,8 @@ class FloatingWindowService : Service() {
 
     override fun onDestroy() {
         instance = null
+        // 取消所有子协程，避免 Service 销毁后协程仍在运行导致内存泄漏与崩溃
+        serviceScope.cancel()
         cleanup()
         super.onDestroy()
     }

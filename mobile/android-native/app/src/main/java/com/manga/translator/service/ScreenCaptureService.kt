@@ -29,6 +29,10 @@ import com.manga.translator.R
 import com.manga.translator.model.TranslationCard
 import com.manga.translator.ocr.OcrProcessor
 import com.manga.translator.plugin.PluginManager
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import java.util.concurrent.atomic.AtomicBoolean
 
 class ScreenCaptureService : Service() {
@@ -77,6 +81,14 @@ class ScreenCaptureService : Service() {
         { r -> Thread(r, "MangaTranslator-Worker") },
         java.util.concurrent.ThreadPoolExecutor.DiscardOldestPolicy(),
     )
+
+    /**
+     * Service 协程作用域：SupervisorJob 防止子协程异常相互取消，Dispatchers.IO 用于阻塞任务。
+     * onDestroy 中 cancel()，所有子协程自动取消。
+     * 后续任务 2.6/2.7 将把 executor.submit / Thread.start / Handler.postDelayed 逐步迁移至此作用域。
+     * 在迁移完成前，executor 与 serviceScope 并存，新代码优先使用 serviceScope。
+     */
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     /**
      * 安全提交任务到 executor，防止 Service 销毁后 submit 抛 RejectedExecutionException 导致主线程崩溃。
@@ -974,8 +986,12 @@ class ScreenCaptureService : Service() {
         isManualTranslating.set(false)
         stopContinuousCapture()
 
+        // 取消所有子协程，避免 Service 销毁后协程仍在运行
+        serviceScope.cancel()
+
         // 异步清理：避免 executor.awaitTermination 阻塞主线程导致 ANR。
         // 主线程仅置位标志 + 取消回调，耗时释放操作放到后台线程。
+        // 后续任务 2.6 将把此处的 Thread.start 替换为 MangaTranslatorApp.appScope.launch
         Thread {
             cleanupResources()
         }.start()
