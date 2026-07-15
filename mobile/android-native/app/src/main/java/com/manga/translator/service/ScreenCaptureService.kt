@@ -25,6 +25,7 @@ import android.util.DisplayMetrics
 import android.util.Log
 import android.view.WindowManager
 import androidx.core.app.NotificationCompat
+import com.manga.translator.MangaTranslatorApp
 import com.manga.translator.R
 import com.manga.translator.di.ServiceLocator
 import com.manga.translator.model.TranslationCard
@@ -34,6 +35,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 import java.util.concurrent.atomic.AtomicBoolean
 
 class ScreenCaptureService : Service() {
@@ -991,11 +993,11 @@ class ScreenCaptureService : Service() {
         serviceScope.cancel()
 
         // 异步清理：避免 executor.awaitTermination 阻塞主线程导致 ANR。
-        // 主线程仅置位标志 + 取消回调，耗时释放操作放到后台线程。
-        // 后续任务 2.6 将把此处的 Thread.start 替换为 MangaTranslatorApp.appScope.launch
-        Thread {
+        // 使用 appScope（生命周期与 Application 相同）而非 serviceScope（已被 cancel），
+        // 确保 cleanupResources 执行完成。
+        MangaTranslatorApp.appScope.launch {
             cleanupResources()
-        }.start()
+        }
 
         FloatingWindowService.onModeChanged = null
         FloatingWindowService.onManualTranslate = null
