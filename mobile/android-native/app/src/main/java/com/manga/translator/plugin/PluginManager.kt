@@ -18,19 +18,14 @@ import com.manga.translator.util.TextFilter
 import kotlin.math.abs
 
 /**
- * 插件管理器（旧编排层）。
+ * 翻译仓储实现：组合 OCR + 翻译 + 检测，编排图片翻译流程。
  *
- * 历史职责：组合 OCR + 翻译 + 检测，编排翻译流程，管理状态（cropConfig、lastDebugData 等）。
- *
- * 架构演进（阶段2）：
- * - 已实现 [TranslationRepository] 接口，作为 data 层翻译仓储的过渡实现
- * - presentation 层应通过 [com.manga.translator.presentation.TranslationController] 调用，
- *   不再直接使用本类
- * - 后续任务 2.8 将删除本类，业务逻辑迁移到 TranslationRepository 的正式实现
- *
- * @deprecated 使用 [com.manga.translator.presentation.TranslationController] 替代。
+ * 架构分层（阶段2）：
+ * - 本类是 [TranslationRepository] 的实现（data 层），负责具体翻译编排
+ * - presentation 层通过 [com.manga.translator.presentation.TranslationController] 调用，
+ *   Controller 管理状态（cropConfig、useAiVisionMode 等）并通过 params 传入
+ * - 状态不再持有于本类的 public API，仅保留内部可变字段供 translate(params) 使用
  */
-@Deprecated("使用 TranslationController 替代，本类将在任务 2.8 移除", ReplaceWith("TranslationController"))
 class PluginManager(private val context: Context) : TranslationRepository {
 
     companion object {
@@ -83,27 +78,6 @@ class PluginManager(private val context: Context) : TranslationRepository {
         Log.d(TAG, "插件管理器初始化完成")
     }
 
-    fun setCropConfig(config: ScreenCropConfig) {
-        cropConfig = config
-    }
-
-    fun setUseAiVisionMode(enabled: Boolean) {
-        useAiVisionMode = enabled
-        Log.d(TAG, "AI多模态识别: ${if (enabled) "启用" else "禁用"}")
-    }
-
-    fun isAiVisionModeEnabled(): Boolean {
-        return useAiVisionMode
-    }
-
-    fun getLastDebugData(): DebugOverlayData {
-        return lastDebugData
-    }
-
-    fun getTranslationPlugin(): TranslationPlugin {
-        return translationPlugin
-    }
-
     /**
      * 翻译图片入口。
      *
@@ -118,7 +92,7 @@ class PluginManager(private val context: Context) : TranslationRepository {
      * @param isManual 是否为手动翻译（影响 AI 路径选择）
      * @return 翻译卡片列表
      */
-    fun translateImage(
+    private fun translateImage(
         bitmap: Bitmap,
         lastTranslationRects: List<Rect> = emptyList(),
         verticalOnly: Boolean = false,
@@ -545,18 +519,6 @@ class PluginManager(private val context: Context) : TranslationRepository {
             }
         }
         return false
-    }
-
-    fun translateText(text: String): String {
-        return translationPlugin.translate(text)
-    }
-
-    fun isConfigured(): Boolean {
-        return translationPlugin.isConfigured()
-    }
-
-    fun clearCache() {
-        translationPlugin.clearCache()
     }
 
     override fun close() {
