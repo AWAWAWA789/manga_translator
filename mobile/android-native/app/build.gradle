@@ -4,6 +4,7 @@ plugins {
     id 'org.jlleitschuh.gradle.ktlint'
     id 'io.gitlab.arturbosch.detekt'
     id 'jacoco'
+    id 'org.owasp.dependencycheck'
 }
 
 android {
@@ -163,6 +164,23 @@ tasks.register('jacocoTestReport', JacocoReport) {
         'jacoco/testDebugUnitTest.exec',
         'outputs/unit_test_code_coverage/debugUnitTest/testDebugUnitTest.exec'
     ]))
+}
+
+// ==================== OWASP Dependency Check 配置 ====================
+dependencyCheck {
+    // NVD API Key（可选，提高速率限制）
+    nvd {
+        apiKey = System.getenv('NVD_API_KEY') ?: ''
+        // 数据库延迟（小时），默认 4 小时
+        delay = 0
+    }
+    // 失败阈值：仅 Critical（CVSS >= 9.0）才让构建失败
+    failBuildOnCVSS = 9.0f
+    // 输出格式
+    formats = ['HTML', 'XML']
+    // 离线模式：跳过 NVD 数据库更新（首次需在线，网络受限时启用）
+    // 在线失败时取消下行注释启用离线扫描
+    // offline = true
 }
 
 

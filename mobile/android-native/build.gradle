@@ -15,6 +15,8 @@ buildscript {
         // 代码质量工具
         classpath 'org.jlleitschuh.gradle:ktlint-gradle:11.6.1'
         classpath 'io.gitlab.arturbosch.detekt:detekt-gradle-plugin:1.23.0'
+        // 安全扫描：OWASP Dependency Check
+        classpath 'org.owasp:dependency-check-gradle:9.0.9'
     }
 }
 
