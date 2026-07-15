@@ -26,6 +26,7 @@ import android.util.Log
 import android.view.WindowManager
 import androidx.core.app.NotificationCompat
 import com.manga.translator.R
+import com.manga.translator.di.ServiceLocator
 import com.manga.translator.model.TranslationCard
 import com.manga.translator.ocr.OcrProcessor
 import com.manga.translator.plugin.PluginManager
@@ -212,8 +213,8 @@ class ScreenCaptureService : Service() {
 
         try {
             getScreenMetrics()
-            ocrProcessor = OcrProcessor(this)
-            pluginManager = PluginManager(this).apply {
+            ocrProcessor = ServiceLocator.createOcrProcessor()
+            pluginManager = ServiceLocator.createPluginManager().apply {
                 initialize()
                 val preferences = getSharedPreferences("translation_config", MODE_PRIVATE)
                 val aiBubbleEnabled = preferences.getBoolean("ai_bubble_detection", false)

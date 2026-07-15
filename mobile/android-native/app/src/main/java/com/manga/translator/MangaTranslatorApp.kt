@@ -5,6 +5,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.util.Log
 import com.manga.translator.debug.DebugManager
+import com.manga.translator.di.ServiceLocator
 import com.manga.translator.service.ScreenCaptureService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -41,6 +42,9 @@ class MangaTranslatorApp : Application() {
 
         // 初始化 DebugManager：使用 applicationContext，确保在任何 Activity/Service 之前完成
         DebugManager.initialize(applicationContext)
+
+        // 初始化 ServiceLocator：集中管理依赖，便于后续接口分离和单元测试替换
+        ServiceLocator.init(applicationContext)
 
         // 提前创建前台服务通知渠道，避免 Service.startForeground 时首次创建渠道失败
         createScreenCaptureNotificationChannel()
