@@ -49,3 +49,6 @@ logs/
 # ===== Detekt / ktlint 报告产物 =====
 **/detekt-report.*
 **/ktlint-report.*
+
+# ===== 改造计划文档（本地维护，不入库）=====
+REFACTOR_PLAN.md
