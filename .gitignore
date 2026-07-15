@@ -1,0 +1,47 @@
+# ===== Android / Gradle =====
+**/build/
+**/.gradle/
+**/local.properties
+*.iml
+.gradle/
+captures/
+.cxx/
+
+# ===== IDE =====
+.idea/
+*.ipr
+*.iws
+.vscode/
+*.swp
+*~
+
+# ===== OS =====
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ===== Native libs 临时解压 =====
+*.so.tmp
+
+# ===== 项目临时产物 =====
+.uploads/
+**/output/
+**/captures/
+
+# ===== 敏感配置（不入库）=====
+**/secrets.properties
+**/api_keys.properties
+
+# ===== 日志 =====
+*.log
+logs/
+
+# ===== APK / AAB 产物（避免大文件入库）=====
+*.apk
+*.aab
+*.ap_
+*.dex
+
+# ===== Detekt / ktlint 报告产物 =====
+**/detekt-report.*
+**/ktlint-report.*

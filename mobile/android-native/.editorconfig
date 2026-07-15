@@ -1,0 +1,39 @@
+# EditorConfig: https://editorconfig.org
+# ktlint 遵循 EditorConfig 规范
+
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+indent_style = space
+indent_size = 4
+insert_final_newline = true
+trim_trailing_whitespace = true
+max_line_length = 140
+
+# 暂时禁用 max-line-length：9 处长行将在架构重构中重写
+# 后续重新启用：ktlint_standard_max-line-length = enabled
+ktlint_standard_max-line-length = disabled
+
+[*.{kt,kts}]
+# ktlint 规则配置
+ktlint_standard_no-wildcard-imports = enabled
+ktlint_standard_import-ordering = enabled
+ktlint_standard_no-blank-line-before-rbrace = enabled
+ktlint_standard_no-consecutive-blank-lines = enabled
+ktlint_standard_no-empty-class-body = enabled
+ktlint_standard_no-semi = enabled
+ktlint_standard_no-trailing-spaces = enabled
+ktlint_standard_spacing-around-colon = enabled
+ktlint_standard_spacing-around-comma = enabled
+ktlint_standard_string-template = enabled
+
+# 允许通配符导入（项目中已有 com.manga.translator.* 等用法，暂不强制）
+ktlint_standard_no-wildcard-imports = disabled
+
+[*.{xml,gradle,md}]
+indent_size = 4
+
+[*.md]
+trim_trailing_whitespace = false

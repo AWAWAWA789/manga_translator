@@ -1,0 +1,64 @@
+<?xml version="1.0" ?>
+<SmellBaseline>
+  <ManuallySuppressedIssues></ManuallySuppressedIssues>
+  <CurrentIssues>
+    <ID>ComplexCondition:ScreenCaptureService.kt$ScreenCaptureService$(!allowManualResult &amp;&amp; screenChangeVersion.get() != expectedVersion) || (!allowManualResult &amp;&amp; FloatingWindowService.isPaused) || (!allowManualResult &amp;&amp; isManualTranslating.get())</ID>
+    <ID>ComplexCondition:ScreenCaptureService.kt$ScreenCaptureService$isScreenStable &amp;&amp; currentHash != lastTranslatedHash &amp;&amp; stableRunnable == null &amp;&amp; !isProcessing.get() &amp;&amp; !inCooldown</ID>
+    <ID>ConstructorParameterNaming:MimoTranslator.kt$MimoTranslator.ChatRequest$val max_tokens: Int = 2048</ID>
+    <ID>CyclomaticComplexMethod:OcrProcessor.kt$OcrProcessor$private fun recognizeBitmap( bitmap: Bitmap, rectBitmapWidth: Int, rectBitmapHeight: Int, origWidth: Int, origHeight: Int, degrees: Float, ): List&lt;OcrResult&gt;</ID>
+    <ID>LargeClass:FloatingWindowService.kt$FloatingWindowService : Service</ID>
+    <ID>LargeClass:OcrProcessor.kt$OcrProcessor</ID>
+    <ID>LargeClass:PluginManager.kt$PluginManager</ID>
+    <ID>LargeClass:ScreenCaptureService.kt$ScreenCaptureService : Service</ID>
+    <ID>LargeClass:TranslationOverlayView.kt$TranslationOverlayView : View</ID>
+    <ID>LoopWithTooManyJumpStatements:BubbleDetector.kt$BubbleDetector$for</ID>
+    <ID>LoopWithTooManyJumpStatements:OcrProcessor.kt$OcrProcessor$for</ID>
+    <ID>LoopWithTooManyJumpStatements:PanelDetector.kt$PanelDetector$for</ID>
+    <ID>LoopWithTooManyJumpStatements:ScreenCaptureService.kt$ScreenCaptureService$while</ID>
+    <ID>LoopWithTooManyJumpStatements:TranslationPlugin.kt$TranslationPlugin$for</ID>
+    <ID>MaxLineLength:OcrProcessor.kt$OcrProcessor$floatArrayOf(contrast, 0f, 0f, 0f, translate, 0f, contrast, 0f, 0f, translate, 0f, 0f, contrast, 0f, translate, 0f, 0f, 0f, 1f, 0f)</ID>
+    <ID>MaxLineLength:PluginManager.kt$PluginManager$"句子调试: text='${region.text}' anchor=[${region.outputRect.centerX()},${region.outputRect.centerY()}] textRect=${region.textRect.toShortString()} out=${region.outputRect.toShortString()} blocks=$blockSummary"</ID>
+    <ID>MaxLineLength:PluginManager.kt$PluginManager$"锚点选择: textRect=${textRect.toShortString()} anchor='${anchor.text.trim()}' rect=${anchor.rect.toShortString()} conf=${anchor.confidence}"</ID>
+    <ID>MaxLineLength:PluginManager.kt$PluginManager$val candidateScore = candidate.text.length + candidate.ocrBlocks.size * 4 - candidate.outputRect.width() * candidate.outputRect.height() / 2500</ID>
+    <ID>MaxLineLength:PluginManager.kt$PluginManager$val currentScore = current.text.length + current.ocrBlocks.size * 4 - current.outputRect.width() * current.outputRect.height() / 2500</ID>
+    <ID>MaxLineLength:ScreenCaptureService.kt$ScreenCaptureService$"doOneShotCapture retry=$retryCount, cachedBitmap=${cachedBitmap != null}, handlerThread alive=${captureHandlerThread?.isAlive}, lastFrameMs=$lastFrameTimeMs"</ID>
+    <ID>MaxLineLength:ScreenCaptureService.kt$ScreenCaptureService$"屏幕: ${realScreenWidth}x$realScreenHeight, 截图: ${screenWidth}x$screenHeight, density=$screenDensity, scaleX=$scaleFactor scaleY=$scaleFactorY"</ID>
+    <ID>MaxLineLength:ScreenCaptureService.kt$ScreenCaptureService$if</ID>
+    <ID>SwallowedException:BubbleDetector.kt$BubbleDetector$_: Exception</ID>
+    <ID>SwallowedException:FloatingWindowService.kt$FloatingWindowService$_: Exception</ID>
+    <ID>SwallowedException:OcrProcessor.kt$OcrProcessor$_: Exception</ID>
+    <ID>SwallowedException:ScreenCaptureService.kt$ScreenCaptureService$_: Exception</ID>
+    <ID>SwallowedException:ScreenCaptureService.kt$ScreenCaptureService$e: Exception</ID>
+    <ID>SwallowedException:TranslationPlugin.kt$TranslationPlugin$e: Exception</ID>
+    <ID>ThrowsCount:AiVisionPipeline.kt$AiVisionPipeline$private fun callMimoVisionApi(base64Image: String, prompt: String): String</ID>
+    <ID>ThrowsCount:BaiduTranslator.kt$BaiduTranslator$private fun callBaiduApi(text: String, appId: String, secretKey: String): String</ID>
+    <ID>ThrowsCount:MimoTranslator.kt$MimoTranslator$private fun callMimoApi(prompt: String): String</ID>
+    <ID>TooGenericExceptionThrown:AiVisionPipeline.kt$AiVisionPipeline$throw Exception("HTTP错误: ${resp.code}")</ID>
+    <ID>TooGenericExceptionThrown:AiVisionPipeline.kt$AiVisionPipeline$throw Exception("MiMo错误: ${result.error.message}")</ID>
+    <ID>TooGenericExceptionThrown:AiVisionPipeline.kt$AiVisionPipeline$throw Exception("响应为空")</ID>
+    <ID>TooGenericExceptionThrown:AiVisionPipeline.kt$AiVisionPipeline$throw Exception("识别结果为空")</ID>
+    <ID>TooGenericExceptionThrown:BaiduTranslator.kt$BaiduTranslator$throw Exception("HTTP错误: ${response.code} 响应: $responseBody")</ID>
+    <ID>TooGenericExceptionThrown:BaiduTranslator.kt$BaiduTranslator$throw Exception("响应为空")</ID>
+    <ID>TooGenericExceptionThrown:BaiduTranslator.kt$BaiduTranslator$throw Exception("响应解析失败")</ID>
+    <ID>TooGenericExceptionThrown:BaiduTranslator.kt$BaiduTranslator$throw Exception("百度错误: ${result.errorCode} - ${result.errorMsg}")</ID>
+    <ID>TooGenericExceptionThrown:BaiduTranslator.kt$BaiduTranslator$throw Exception("翻译结果为空")</ID>
+    <ID>TooGenericExceptionThrown:MimoTranslator.kt$MimoTranslator$throw Exception("HTTP错误: ${response.code}")</ID>
+    <ID>TooGenericExceptionThrown:MimoTranslator.kt$MimoTranslator$throw Exception("MiMo错误: ${result.error.message}")</ID>
+    <ID>TooGenericExceptionThrown:MimoTranslator.kt$MimoTranslator$throw Exception("响应为空")</ID>
+    <ID>TooGenericExceptionThrown:MimoTranslator.kt$MimoTranslator$throw Exception("翻译结果为空")</ID>
+    <ID>TooGenericExceptionThrown:ScreenCaptureService.kt$ScreenCaptureService$throw Exception("MediaProjection为null")</ID>
+    <ID>TooGenericExceptionThrown:ScreenCaptureService.kt$ScreenCaptureService$throw Exception("VirtualDisplay为null")</ID>
+    <ID>UnusedParameter:OpenCVHelper.kt$OpenCVHelper$context: Context</ID>
+    <ID>UnusedParameter:PluginManager.kt$PluginManager$panels: List&lt;PanelDetector.PanelInfo&gt;</ID>
+    <ID>UnusedPrivateMember:FloatingWindowService.kt$FloatingWindowService$private fun addTranslationOverlays(results: List&lt;TranslationCard&gt;)</ID>
+    <ID>UnusedPrivateProperty:BaiduTranslator.kt$BaiduTranslator.Companion$private const val PREFS_NAME = "translation_config"</ID>
+    <ID>UnusedPrivateProperty:OcrProcessor.kt$OcrProcessor$private val context: Context</ID>
+    <ID>UnusedPrivateProperty:OcrProcessor.kt$OcrProcessor.Companion$private const val OVERLAP_THRESHOLD = 45</ID>
+    <ID>UnusedPrivateProperty:ScreenCaptureService.kt$ScreenCaptureService.Companion$private const val HASH_CHANGE_THRESHOLD = 0.012f</ID>
+    <ID>UseCheckOrError:AiVisionPipeline.kt$AiVisionPipeline$throw IllegalStateException("MiMo API未配置")</ID>
+    <ID>UseCheckOrError:DebugManager.kt$DebugManager$throw IllegalStateException("DebugManager 未初始化，请先调用 initialize(applicationContext)")</ID>
+    <ID>UseRequire:AiVisionPipeline.kt$AiVisionPipeline$throw IllegalArgumentException("Bitmap 尺寸非法: ${bitmap.width}x${bitmap.height}")</ID>
+    <ID>UseRequire:MimoTranslator.kt$MimoTranslator$throw IllegalArgumentException("baseUrl 必须使用 https://，禁止 http:// 明文传输 API Key")</ID>
+    <ID>VariableNaming:ScreenCaptureService.kt$ScreenCaptureService$// 限流：最小帧处理间隔，避免 60fps 全屏 Bitmap 分配导致 OOM private val MIN_FRAME_INTERVAL_MS = 200L</ID>
+  </CurrentIssues>
+</SmellBaseline>

@@ -1,0 +1,114 @@
+# detekt 配置
+# 文档: https://detekt.dev/docs/rules
+# 基于默认配置 buildUponDefaultConfig=true，此处仅覆盖需要调整的规则
+
+complexity:
+  active: true
+  LongMethod:
+    active: true
+    threshold: 120  # 默认 60，放宽至 120 适配现有代码
+  LongParameterList:
+    active: true
+    functionThreshold: 8
+    constructorThreshold: 8
+    ignoreDefaultParameters: true
+  ComplexCondition:
+    active: true
+    threshold: 5  # 默认 4
+  CyclomaticComplexMethod:
+    active: true
+    threshold: 20  # 默认 15
+    ignoreSingleWhenExpression: true
+  LargeClass:
+    active: true
+    threshold: 250  # 默认 200，放宽适配现有代码
+  NestedBlockDepth:
+    active: true
+    threshold: 5  # 默认 4
+
+empty-blocks:
+  active: true
+  EmptyFunctionBlock:
+    active: true
+    ignoreOverridden: true
+
+exceptions:
+  active: true
+  SwallowedException:
+    active: true
+    allowedExceptionNameRegex: '^(ignore|expected).*'
+  TooGenericExceptionCaught:
+    active: true
+    exceptionNames:
+      - ArrayIndexOutOfBoundsException
+      - Error
+      - Exception
+      - IllegalMonitorStateException
+      - NullPointerException
+      - RuntimeException
+      - Throwable
+    allowedExceptionNameRegex: '^(ignore|expected).*'
+  TooGenericExceptionThrown:
+    active: true
+
+naming:
+  active: true
+  FunctionNaming:
+    active: true
+    functionPattern: '([a-z][a-zA-Z0-9]*)|(`.*`)'
+    excludeClassPattern: '$^'
+  VariableNaming:
+    active: true
+    variablePattern: '([a-z][a-zA-Z0-9]*)|(_?[A-Z][A-Z0-9_]*)'
+  ClassNaming:
+    active: true
+    classPattern: '[A-Z][a-zA-Z0-9]*'
+
+performance:
+  active: true
+  ForEachOnRange:
+    active: true
+  SpreadOperator:
+    active: true
+  UnnecessaryTemporaryInstantiation:
+    active: true
+
+potential-bugs:
+  active: true
+  UnsafeCallOnNullableType:
+    active: true
+  UnreachableCode:
+    active: true
+  LateinitUsage:
+    active: false  # 项目中合理使用 lateinit
+  IteratorNotThrowingNoSuchElementException:
+    active: true
+  EqualsAlwaysReturnsTrueOrFalse:
+    active: true
+
+style:
+  active: true
+  MagicNumber:
+    active: false  # 过于嘈杂，关闭
+  ReturnCount:
+    active: false  # 过于嘈杂，关闭
+  WildcardImport:
+    active: false  # 已在 ktlint 中禁用
+  MaxLineLength:
+    active: true
+    maxLineLength: 140
+    excludePackageStatements: true
+    excludeImportStatements: true
+  ForbiddenComment:
+    active: true
+    comments: ['STOPSHIP', 'TODO']
+  SerialVersionUIDInSerializableClass:
+    active: false
+  UseDataClass:
+    active: true
+  UnnecessaryAbstractClass:
+    active: false  # 误报较多
+  UtilityClassWithPublicConstructor:
+    active: false
+
+# 空检查规则已在 empty-blocks 中配置

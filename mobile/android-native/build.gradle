@@ -1,0 +1,23 @@
+// Top-level build file where you can add configuration options common to all sub-projects/modules.
+buildscript {
+    repositories {
+        maven { url 'https://maven.aliyun.com/repository/google' }
+        maven { url 'https://maven.aliyun.com/repository/central' }
+        maven { url 'https://maven.aliyun.com/repository/public' }
+        maven { url 'https://maven.aliyun.com/repository/gradle-plugin' }
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+    dependencies {
+        classpath 'com.android.tools.build:gradle:8.1.0'
+        classpath 'org.jetbrains.kotlin:kotlin-gradle-plugin:1.8.0'
+        // 代码质量工具
+        classpath 'org.jlleitschuh.gradle:ktlint-gradle:11.6.1'
+        classpath 'io.gitlab.arturbosch.detekt:detekt-gradle-plugin:1.23.0'
+    }
+}
+
+task clean(type: Delete) {
+    delete rootProject.buildDir
+}
