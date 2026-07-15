@@ -13,6 +13,7 @@ import com.manga.translator.translation.TranslationPlugin
 import com.manga.translator.util.AppLog
 import com.manga.translator.util.ComicImageCropper
 import com.manga.translator.util.OpenCVHelper
+import com.manga.translator.util.PerfTracker
 import com.manga.translator.util.ScreenCropConfig
 import com.manga.translator.util.TextFilter
 import kotlin.math.abs
@@ -102,6 +103,7 @@ class PluginManager(private val context: Context) : TranslationRepository {
             return emptyList()
         }
 
+        val tracker = PerfTracker.start("PluginManager", "翻译图片")
         AppLog.d("PluginManager", "开始翻译图片: ${bitmap.width}x${bitmap.height}")
         AppLog.d("PluginManager", "=== PluginManager v3 已加载 ===")
 
@@ -115,6 +117,7 @@ class PluginManager(private val context: Context) : TranslationRepository {
                 try {
                     AppLog.d("PluginManager", "使用AI多模态识别")
                     val aiResult = aiVisionPipeline.analyzeImage(croppedBitmap, croppedBitmap.width, croppedBitmap.height)
+                    tracker.end("AI多模态识别")
                     // 检查解析错误：parseResponse 失败时返回带 error 的结果，需回退 OCR 流程
                     if (aiResult.error != null) {
                         AppLog.w("PluginManager", "AI响应解析失败，回退OCR流程: ${aiResult.error}")
@@ -152,6 +155,7 @@ class PluginManager(private val context: Context) : TranslationRepository {
             AppLog.d("PluginManager", "气泡检测: ${bubbles.size} 个气泡")
 
             val ocrBlocks = ocrPlugin.recognize(croppedBitmap, verticalOnly)
+            tracker.end("OCR识别")
             AppLog.d("PluginManager", "OCR识别: ${ocrBlocks.size} 个块")
 
             val textFilteredBlocks = ocrBlocks.filter { TextFilter.isValidOcrText(it.text) }
@@ -167,11 +171,13 @@ class PluginManager(private val context: Context) : TranslationRepository {
                 ocrBlocks = filteredBlocks,
                 bitmap = croppedBitmap,
             )
+            tracker.end("翻译")
             val result = translatedCropResult.map { card -> card.withOffset(cropRect.left, cropRect.top) }
             lastDebugData = lastDebugData.withOffset(cropRect.left, cropRect.top)
 
             return result
         } finally {
+            tracker.finish()
             // 统一在 finally 中回收 croppedBitmap，避免异常路径下资源泄漏
             if (croppedBitmap != bitmap) {
                 croppedBitmap.recycle()

@@ -31,6 +31,7 @@ import com.manga.translator.model.TranslationCard
 import com.manga.translator.ocr.OcrProcessor
 import com.manga.translator.presentation.TranslationController
 import com.manga.translator.util.AppLog
+import com.manga.translator.util.PerfTracker
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -937,9 +938,11 @@ class ScreenCaptureService : Service() {
         }
         safeSubmit {
             var completionStatusScheduled = false
+            val tracker = PerfTracker.start("翻译", "一次翻译流程")
             try {
                 handler?.post { FloatingWindowService.setStatusText("识别中") }
                 val shown = doOcrAndTranslate(bitmap, allowManualResult = isManual)
+                tracker.end("OCR+翻译+渲染")
                 if (shown) {
                     lastTranslationTimeMs = System.currentTimeMillis()
                     completionStatusScheduled = true
@@ -957,6 +960,7 @@ class ScreenCaptureService : Service() {
                 handler?.post { FloatingWindowService.setStatusText("失败") }
                 handler?.postDelayed({ FloatingWindowService.updateMainAppearance() }, 1200L)
             } finally {
+                tracker.finish()
                 isProcessing.set(false)
                 isManualTranslating.set(false)
                 if (!completionStatusScheduled) restoreFloatingUiAfterCapture()
