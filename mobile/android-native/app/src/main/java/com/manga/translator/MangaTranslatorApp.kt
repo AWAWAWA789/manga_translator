@@ -3,10 +3,11 @@ package com.manga.translator
 import android.app.Application
 import android.app.NotificationChannel
 import android.app.NotificationManager
-import android.util.Log
 import com.manga.translator.debug.DebugManager
 import com.manga.translator.di.ServiceLocator
 import com.manga.translator.service.ScreenCaptureService
+import com.manga.translator.util.AppLog
+import com.manga.translator.util.CrashHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -26,8 +27,6 @@ import kotlinx.coroutines.SupervisorJob
 class MangaTranslatorApp : Application() {
 
     companion object {
-        private const val TAG = "MangaTranslator"
-
         /**
          * 应用级协程作用域：SupervisorJob 确保子协程异常不会互相取消；
          * Dispatchers.Default 适用于 CPU 密集与轻量 IO，阻塞 IO 应使用 Dispatchers.IO。
@@ -38,7 +37,10 @@ class MangaTranslatorApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
-        Log.d(TAG, "MangaTranslatorApp onCreate")
+        AppLog.d("MangaTranslator", "[启动] Application onCreate")
+
+        // 注册全局崩溃处理器：崩溃堆栈写入本地文件，便于事后排查
+        CrashHandler.init(applicationContext)
 
         // 初始化 DebugManager：使用 applicationContext，确保在任何 Activity/Service 之前完成
         DebugManager.initialize(applicationContext)
