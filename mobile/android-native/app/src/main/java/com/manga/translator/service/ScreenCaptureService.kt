@@ -22,7 +22,6 @@ import android.os.HandlerThread
 import android.os.IBinder
 import android.os.Looper
 import android.util.DisplayMetrics
-import android.util.Log
 import android.view.WindowManager
 import androidx.core.app.NotificationCompat
 import com.manga.translator.MangaTranslatorApp
@@ -31,6 +30,7 @@ import com.manga.translator.di.ServiceLocator
 import com.manga.translator.model.TranslationCard
 import com.manga.translator.ocr.OcrProcessor
 import com.manga.translator.presentation.TranslationController
+import com.manga.translator.util.AppLog
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -99,13 +99,13 @@ class ScreenCaptureService : Service() {
      */
     private fun safeSubmit(action: () -> Unit) {
         if (executor.isShutdown) {
-            Log.w(TAG, "executor 已关闭，跳过任务提交")
+            AppLog.w("ScreenCapture", "executor 已关闭，跳过任务提交")
             return
         }
         try {
             executor.submit(action)
         } catch (e: java.util.concurrent.RejectedExecutionException) {
-            Log.w(TAG, "任务被拒绝: ${e.message}")
+            AppLog.w("ScreenCapture", "任务被拒绝: ${e.message}")
         }
     }
 
@@ -162,7 +162,7 @@ class ScreenCaptureService : Service() {
             val bitmap = imageToBitmap(image)
             if (bitmap != null) {
                 if (lastFrameTimeMs == 0L) {
-                    Log.d(TAG, "首帧到达: ${image.width}x${image.height}")
+                    AppLog.d("ScreenCapture", "首帧到达: ${image.width}x${image.height}")
                 }
                 synchronized(cachedBitmapLock) {
                     cachedBitmap?.recycle()
@@ -174,7 +174,7 @@ class ScreenCaptureService : Service() {
             }
         } catch (e: Throwable) {
             // 捕获 Throwable 而非 Exception，防止 OutOfMemoryError 杀死 HandlerThread Looper
-            Log.e(TAG, "帧缓存更新失败: ${e.message}")
+            AppLog.e("ScreenCapture", "帧缓存更新失败: ${e.message}")
         } finally {
             image.close()
         }
@@ -191,7 +191,7 @@ class ScreenCaptureService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        Log.d(TAG, "ScreenCaptureService onStartCommand")
+        AppLog.d("ScreenCapture", "ScreenCaptureService onStartCommand")
 
         val resultCode = intent?.getIntExtra(EXTRA_RESULT_CODE, -1) ?: -1
         val data: Intent? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -221,10 +221,10 @@ class ScreenCaptureService : Service() {
                 val preferences = getSharedPreferences("translation_config", MODE_PRIVATE)
                 val aiBubbleEnabled = preferences.getBoolean("ai_bubble_detection", false)
                 setUseAiVisionMode(aiBubbleEnabled)
-                Log.d(TAG, "AI气泡检测: ${if (aiBubbleEnabled) "启用" else "禁用"}")
+                AppLog.d("ScreenCapture", "AI气泡检测: ${if (aiBubbleEnabled) "启用" else "禁用"}")
             }
         } catch (e: Exception) {
-            Log.e(TAG, "组件初始化失败: ${e.message}")
+            AppLog.e("ScreenCapture", "组件初始化失败: ${e.message}")
             stopSelf()
             return START_NOT_STICKY
         }
@@ -232,14 +232,14 @@ class ScreenCaptureService : Service() {
         try {
             createMediaProjection(resultCode, data)
         } catch (e: Exception) {
-            Log.e(TAG, "MediaProjection创建失败: ${e.message}")
+            AppLog.e("ScreenCapture", "MediaProjection创建失败: ${e.message}")
             stopSelf()
             return START_NOT_STICKY
         }
 
         setupCallbacks()
         isRunning.set(true)
-        Log.d(TAG, "服务启动完成")
+        AppLog.d("ScreenCapture", "服务启动完成")
 
         return START_STICKY
     }
@@ -248,7 +248,7 @@ class ScreenCaptureService : Service() {
         FloatingWindowService.onModeChanged = { mode ->
             when (mode) {
                 FloatingWindowService.Companion.TranslateMode.REALTIME -> {
-                    Log.d(TAG, "切换到实时翻译模式")
+                    AppLog.d("ScreenCapture", "切换到实时翻译模式")
                     isRealtimeEnabled.set(true)
                     isManualTranslating.set(false)
                     resetState()
@@ -261,7 +261,7 @@ class ScreenCaptureService : Service() {
                     }, 500L)
                 }
                 FloatingWindowService.Companion.TranslateMode.MANUAL -> {
-                    Log.d(TAG, "切换到手动翻译模式")
+                    AppLog.d("ScreenCapture", "切换到手动翻译模式")
                     isRealtimeEnabled.set(false)
                     isManualTranslating.set(false)
                     stopContinuousCapture()
@@ -271,7 +271,7 @@ class ScreenCaptureService : Service() {
         }
 
         FloatingWindowService.onPauseChanged = { paused ->
-            Log.d(TAG, "暂停状态: $paused")
+            AppLog.d("ScreenCapture", "暂停状态: $paused")
             if (paused) {
                 isRealtimeEnabled.set(false)
                 stopContinuousCapture()
@@ -301,12 +301,12 @@ class ScreenCaptureService : Service() {
         }
 
         FloatingWindowService.onManualTranslate = {
-            Log.d(TAG, "手动翻译触发")
+            AppLog.d("ScreenCapture", "手动翻译触发")
             executeManualTranslation()
         }
 
         FloatingWindowService.onRecognitionDirectionChanged = { direction ->
-            Log.d(TAG, "识别方向变更: $direction")
+            AppLog.d("ScreenCapture", "识别方向变更: $direction")
             FloatingWindowService.clearAllTranslations()
             if (isRealtimeEnabled.get() && !FloatingWindowService.isPaused) {
                 resetState()
@@ -352,8 +352,8 @@ class ScreenCaptureService : Service() {
         }
         scaleFactor = screenWidth.toFloat() / realScreenWidth.toFloat()
         scaleFactorY = screenHeight.toFloat() / realScreenHeight.toFloat()
-        Log.d(
-            TAG,
+        AppLog.d(
+            "ScreenCapture",
             "屏幕: ${realScreenWidth}x$realScreenHeight, 截图: ${screenWidth}x$screenHeight, density=$screenDensity, scaleX=$scaleFactor scaleY=$scaleFactorY",
         )
     }
@@ -391,7 +391,7 @@ class ScreenCaptureService : Service() {
                 Bitmap.createBitmap(cached)
             } catch (e: Throwable) {
                 // 捕获 Throwable 防止 OOM 导致调用方崩溃
-                Log.e(TAG, "复制缓存帧失败: ${e.message}")
+                AppLog.e("ScreenCapture", "复制缓存帧失败: ${e.message}")
                 null
             }
         }
@@ -428,7 +428,7 @@ class ScreenCaptureService : Service() {
                 if (copy != null) return copy
                 val stolen = stealCachedBitmap()
                 if (stolen != null) {
-                    Log.w(TAG, "getCachedBitmapCopy 失败，使用 stealCachedBitmap 回退")
+                    AppLog.w("ScreenCapture", "getCachedBitmapCopy 失败，使用 stealCachedBitmap 回退")
                     return stolen
                 }
                 // 缓存被取走或为空，继续等待下一帧
@@ -454,7 +454,7 @@ class ScreenCaptureService : Service() {
      * 当帧缓存长时间无更新时的最终恢复手段
      */
     private fun recreateCapturePipeline() {
-        Log.w(TAG, "重建截图管线")
+        AppLog.w("ScreenCapture", "重建截图管线")
         try {
             // 先解绑监听器，避免旧 ImageReader 在 close 过程中仍回调导致并发问题
             imageReader?.setOnImageAvailableListener(null, null)
@@ -465,18 +465,18 @@ class ScreenCaptureService : Service() {
 
             // 检查 HandlerThread 是否存活，若已死亡则重建
             if (captureHandlerThread?.isAlive != true) {
-                Log.w(TAG, "FrameCapture HandlerThread 已死亡，重建中...")
+                AppLog.w("ScreenCapture", "FrameCapture HandlerThread 已死亡，重建中...")
                 captureHandlerThread?.quitSafely()
                 captureHandlerThread = HandlerThread("FrameCapture").also { thread ->
                     thread.start()
                     captureHandler = Handler(thread.looper)
                 }
-                Log.w(TAG, "HandlerThread 重建完成")
+                AppLog.w("ScreenCapture", "HandlerThread 重建完成")
             }
 
             // MediaProjection 可能在用户撤销权限后失效，重建前先检查
             if (mediaProjection == null) {
-                Log.e(TAG, "MediaProjection 已失效，无法重建截图管线")
+                AppLog.e("ScreenCapture", "MediaProjection 已失效，无法重建截图管线")
                 return
             }
 
@@ -488,9 +488,9 @@ class ScreenCaptureService : Service() {
                 DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR, imageReader!!.surface, null, captureHandler,
             )
 
-            Log.w(TAG, "截图管线重建完成: ${screenWidth}x$screenHeight@${screenDensity}dpi")
+            AppLog.w("ScreenCapture", "截图管线重建完成: ${screenWidth}x$screenHeight@${screenDensity}dpi")
         } catch (e: Exception) {
-            Log.e(TAG, "截图管线重建失败: ${e.message}")
+            AppLog.e("ScreenCapture", "截图管线重建失败: ${e.message}")
         }
     }
 
@@ -503,10 +503,10 @@ class ScreenCaptureService : Service() {
     private fun executeOneShotTranslation(isManual: Boolean) {
         if (!isRunning.get()) return
         if (!isProcessing.compareAndSet(false, true)) {
-            Log.w(TAG, "已有翻译任务进行中，检查是否卡住")
+            AppLog.w("ScreenCapture", "已有翻译任务进行中，检查是否卡住")
             // Safety: force reset if stuck for too long
             if (System.currentTimeMillis() - lastTranslationTimeMs > 8000) {
-                Log.w(TAG, "isProcessing 卡住超过8秒，强制重置")
+                AppLog.w("ScreenCapture", "isProcessing 卡住超过8秒，强制重置")
                 isProcessing.set(false)
                 isManualTranslating.set(false)
                 restoreFloatingUiAfterCapture()
@@ -515,7 +515,7 @@ class ScreenCaptureService : Service() {
                     if (isRunning.get() && !FloatingWindowService.isPaused) {
                         executeOneShotTranslation(isManual)
                     } else {
-                        Log.d(TAG, "重试前状态已变更（running=${isRunning.get()}, paused=${FloatingWindowService.isPaused}），跳过重试")
+                        AppLog.d("ScreenCapture", "重试前状态已变更（running=${isRunning.get()}, paused=${FloatingWindowService.isPaused}），跳过重试")
                     }
                 }, 200)
             }
@@ -543,8 +543,8 @@ class ScreenCaptureService : Service() {
         safeSubmit {
             try {
                 // 诊断日志
-                Log.d(
-                    TAG,
+                AppLog.d(
+                    "ScreenCapture",
                     "doOneShotCapture retry=$retryCount, cachedBitmap=${cachedBitmap != null}, handlerThread alive=${captureHandlerThread?.isAlive}, lastFrameMs=$lastFrameTimeMs",
                 )
 
@@ -554,17 +554,17 @@ class ScreenCaptureService : Service() {
                 val bitmap = waitForFreshFrame(timeoutMs = timeoutMs, requireFresh = false)
 
                 if (bitmap != null) {
-                    Log.d(TAG, if (isManual) "手动翻译截图成功" else "自动单次翻译截图成功")
+                    AppLog.d("ScreenCapture", if (isManual) "手动翻译截图成功" else "自动单次翻译截图成功")
                     handler?.post { processImage(bitmap, isManual) }
                     return@safeSubmit
                 }
 
                 // 缓存为空，尝试重建截图管线后重试
                 if (retryCount < 4) {
-                    Log.d(TAG, "单次翻译重试 ${retryCount + 1}/4")
+                    AppLog.d("ScreenCapture", "单次翻译重试 ${retryCount + 1}/4")
                     // 每次重试都检测 HandlerThread 存活状态
                     if (captureHandlerThread?.isAlive != true) {
-                        Log.w(TAG, "HandlerThread 已死亡，重建中...")
+                        AppLog.w("ScreenCapture", "HandlerThread 已死亡，重建中...")
                         recreateCapturePipeline()
                     } else if (retryCount == 0) {
                         recreateCapturePipeline()
@@ -573,7 +573,7 @@ class ScreenCaptureService : Service() {
                     val delayMs = if (retryCount == 0) 800L else 500L
                     handler?.postDelayed({ doOneShotCapture(retryCount + 1, isManual) }, delayMs)
                 } else {
-                    Log.e(TAG, "单次翻译失败：多次重试后仍无图像")
+                    AppLog.e("ScreenCapture", "单次翻译失败：多次重试后仍无图像")
                     handler?.post {
                         isManualTranslating.set(false)
                         isProcessing.set(false)
@@ -582,7 +582,7 @@ class ScreenCaptureService : Service() {
                     }
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "单次翻译失败: ${e.message}")
+                AppLog.e("ScreenCapture", "单次翻译失败: ${e.message}")
                 handler?.post {
                     isManualTranslating.set(false)
                     isProcessing.set(false)
@@ -604,7 +604,7 @@ class ScreenCaptureService : Service() {
 
     private fun startContinuousCapture() {
         stopContinuousCapture()
-        Log.d(TAG, "启动持续截图")
+        AppLog.d("ScreenCapture", "启动持续截图")
         val runnable = object : Runnable {
             override fun run() {
                 if (!isRunning.get()) return
@@ -619,7 +619,7 @@ class ScreenCaptureService : Service() {
     }
 
     private fun stopContinuousCapture() {
-        Log.d(TAG, "停止持续截图")
+        AppLog.d("ScreenCapture", "停止持续截图")
         captureLoopRunnable?.let { handler?.removeCallbacks(it) }
         captureLoopRunnable = null
         cancelPendingTranslation()
@@ -638,7 +638,7 @@ class ScreenCaptureService : Service() {
             val currentHash = try {
                 computePixelHash(cached)
             } catch (e: IllegalStateException) {
-                Log.w(TAG, "checkScreenChange: 帧已被回收，跳过本轮: ${e.message}")
+                AppLog.w("ScreenCapture", "checkScreenChange: 帧已被回收，跳过本轮: ${e.message}")
                 return
             }
 
@@ -685,7 +685,7 @@ class ScreenCaptureService : Service() {
 
             lastFrameHash = currentHash
         } catch (e: Exception) {
-            Log.w(TAG, "checkScreenChange: ${e.message}")
+            AppLog.w("ScreenCapture", "checkScreenChange: ${e.message}")
         }
     }
 
@@ -765,7 +765,7 @@ class ScreenCaptureService : Service() {
                     lastTranslationTimeMs = System.currentTimeMillis()
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "截图失败: ${e.message}")
+                AppLog.e("ScreenCapture", "截图失败: ${e.message}")
                 // 异常路径兜底：若 bitmap 尚未被消费，必须 recycle 避免泄漏
                 if (!bitmapConsumed) {
                     capturedBitmap?.let {
@@ -817,7 +817,7 @@ class ScreenCaptureService : Service() {
                 }
             }
         } catch (e: Throwable) {
-            Log.e(TAG, "图片转换失败: ${e.message}")
+            AppLog.e("ScreenCapture", "图片转换失败: ${e.message}")
             null
         }
     }
@@ -842,7 +842,7 @@ class ScreenCaptureService : Service() {
                 return false
             }
 
-            Log.d(TAG, "开始OCR+翻译处理")
+            AppLog.d("ScreenCapture", "开始OCR+翻译处理")
             if (allowManualResult) FloatingWindowService.setStatusText("识")
 
             val direction = FloatingWindowService.recognitionDirection
@@ -856,16 +856,16 @@ class ScreenCaptureService : Service() {
             bitmap.recycle()
 
             if ((!allowManualResult && screenChangeVersion.get() != expectedVersion) || (!allowManualResult && FloatingWindowService.isPaused) || (!allowManualResult && isManualTranslating.get())) {
-                Log.d(TAG, "画面已变化，丢弃过期翻译结果")
+                AppLog.d("ScreenCapture", "画面已变化，丢弃过期翻译结果")
                 return false
             }
 
             if (translationCards.isEmpty()) {
-                Log.d(TAG, "未识别到文本或翻译结果为空")
+                AppLog.d("ScreenCapture", "未识别到文本或翻译结果为空")
                 return false
             }
 
-            Log.d(TAG, "翻译完成，获得 ${translationCards.size} 个结果")
+            AppLog.d("ScreenCapture", "翻译完成，获得 ${translationCards.size} 个结果")
 
             val debugData = plugin.getLastDebugData()
 
@@ -905,14 +905,14 @@ class ScreenCaptureService : Service() {
                 FloatingWindowService.showTranslationsWithDebug(this, results, debugData)
                 lastTranslationRects.clear()
                 lastTranslationRects.addAll(results.map { it.sourceRect })
-                Log.d(TAG, "显示 ${results.size} 个翻译结果")
+                AppLog.d("ScreenCapture", "显示 ${results.size} 个翻译结果")
                 return true
             } else {
-                Log.d(TAG, "没有有效的翻译结果")
+                AppLog.d("ScreenCapture", "没有有效的翻译结果")
                 return false
             }
         } catch (e: Exception) {
-            Log.e(TAG, "处理失败: ${e.message}")
+            AppLog.e("ScreenCapture", "处理失败: ${e.message}")
             try { bitmap.recycle() } catch (_: Exception) {}
             return false
         }
@@ -926,7 +926,7 @@ class ScreenCaptureService : Service() {
         // 此时 safeSubmit 会静默 return，导致 bitmap 泄漏。
         // 提前检查，若 executor 已关闭则直接 recycle。
         if (executor.isShutdown) {
-            Log.w(TAG, "processImage: executor 已关闭，直接 recycle bitmap")
+            AppLog.w("ScreenCapture", "processImage: executor 已关闭，直接 recycle bitmap")
             try {
                 bitmap.recycle()
             } catch (_: Exception) {
@@ -953,7 +953,7 @@ class ScreenCaptureService : Service() {
                     handler?.postDelayed({ FloatingWindowService.updateMainAppearance() }, 1200L)
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "单次翻译处理失败: ${e.message}")
+                AppLog.e("ScreenCapture", "单次翻译处理失败: ${e.message}")
                 handler?.post { FloatingWindowService.setStatusText("失败") }
                 handler?.postDelayed({ FloatingWindowService.updateMainAppearance() }, 1200L)
             } finally {
@@ -983,7 +983,7 @@ class ScreenCaptureService : Service() {
     }
 
     override fun onDestroy() {
-        Log.d(TAG, "服务销毁")
+        AppLog.d("ScreenCapture", "服务销毁")
         isRunning.set(false)
         isRealtimeEnabled.set(false)
         isManualTranslating.set(false)
@@ -1027,12 +1027,12 @@ class ScreenCaptureService : Service() {
         executor.shutdown()
         try {
             if (!executor.awaitTermination(5, java.util.concurrent.TimeUnit.SECONDS)) {
-                Log.w(TAG, "executor 未在 5 秒内终止，强制 shutdownNow")
+                AppLog.w("ScreenCapture", "executor 未在 5 秒内终止，强制 shutdownNow")
                 executor.shutdownNow()
                 executor.awaitTermination(2, java.util.concurrent.TimeUnit.SECONDS)
             }
         } catch (e: InterruptedException) {
-            Log.w(TAG, "awaitTermination 被中断: ${e.message}")
+            AppLog.w("ScreenCapture", "awaitTermination 被中断: ${e.message}")
             Thread.currentThread().interrupt()
         }
 

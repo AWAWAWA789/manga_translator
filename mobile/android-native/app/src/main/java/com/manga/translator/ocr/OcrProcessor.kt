@@ -8,12 +8,12 @@ import android.graphics.ColorMatrixColorFilter
 import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Rect
-import android.util.Log
 import com.google.android.gms.tasks.Tasks
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.TextRecognizer
 import com.google.mlkit.vision.text.japanese.JapaneseTextRecognizerOptions
+import com.manga.translator.util.AppLog
 import com.manga.translator.util.TextFilter
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.TimeUnit
@@ -23,7 +23,6 @@ import kotlin.math.min
 class OcrProcessor(private val context: Context) {
 
     companion object {
-        private const val TAG = "MangaTranslator"
         private const val TIMEOUT_SECONDS = 15L
         private const val MIN_TEXT_LENGTH = 2
         private const val MAX_OCR_SIZE = 1600
@@ -55,15 +54,15 @@ class OcrProcessor(private val context: Context) {
     fun recognizeText(bitmap: Bitmap, verticalOnly: Boolean = false): List<OcrResult> {
         // 零尺寸校验，防止上游传入异常 Bitmap 导致 createBitmap 崩溃
         if (bitmap.width <= 0 || bitmap.height <= 0) {
-            Log.w(TAG, "recognizeText 收到零尺寸 Bitmap: ${bitmap.width}x${bitmap.height}")
+            AppLog.w("OcrProcessor", "recognizeText 收到零尺寸 Bitmap: ${bitmap.width}x${bitmap.height}")
             return emptyList()
         }
-        Log.d(TAG, "开始OCR识别，图片尺寸: ${bitmap.width}x${bitmap.height}，模式: ${if (verticalOnly) "竖向" else "横向"}")
+        AppLog.d("OcrProcessor", "开始OCR识别，图片尺寸: ${bitmap.width}x${bitmap.height}，模式: ${if (verticalOnly) "竖向" else "横向"}")
 
         val cropTop = (bitmap.height * CROP_TOP_RATIO).toInt()
         val cropBottom = (bitmap.height * CROP_BOTTOM_RATIO).toInt()
         val croppedBitmap = Bitmap.createBitmap(bitmap, 0, cropTop, bitmap.width, cropBottom - cropTop)
-        Log.d(TAG, "裁剪区域: top=$cropTop, bottom=$cropBottom")
+        AppLog.d("OcrProcessor", "裁剪区域: top=$cropTop, bottom=$cropBottom")
 
         val scaledBitmap = ensureMinSize(croppedBitmap, 1100)
         val enhancedBitmap = enhanceForOcr(scaledBitmap, 1.6f)
@@ -116,17 +115,17 @@ class OcrProcessor(private val context: Context) {
                 try {
                     future.get(20, TimeUnit.SECONDS)
                 } catch (e: java.util.concurrent.TimeoutException) {
-                    Log.e(TAG, "OCR 第${idx + 1}遍超时")
+                    AppLog.e("OcrProcessor", "OCR 第${idx + 1}遍超时")
                     emptyList()
                 } catch (e: Exception) {
-                    Log.e(TAG, "OCR 第${idx + 1}遍异常: ${e.message}")
+                    AppLog.e("OcrProcessor", "OCR 第${idx + 1}遍异常: ${e.message}")
                     emptyList()
                 }
             }
 
             // 逐层去重合并
             val allResults = results.reduce { acc, list -> deduplicateResults(acc, list) }
-            Log.d(TAG, "方向合并后: ${allResults.size} 个")
+            AppLog.d("OcrProcessor", "方向合并后: ${allResults.size} 个")
 
             val scaleX = croppedBitmap.width.toFloat() / scaledBitmap.width.toFloat()
             val scaleY = croppedBitmap.height.toFloat() / scaledBitmap.height.toFloat()
@@ -143,7 +142,7 @@ class OcrProcessor(private val context: Context) {
                 )
             }
 
-            Log.d(TAG, "最终结果: ${scaledResults.size} 个")
+            AppLog.d("OcrProcessor", "最终结果: ${scaledResults.size} 个")
             return scaledResults
         } finally {
             if (enhancedBitmap !== scaledBitmap) try { enhancedBitmap.recycle() } catch (_: Exception) {}
@@ -342,7 +341,7 @@ class OcrProcessor(private val context: Context) {
             // 同步等待 ML Kit 结果，超时抛 TimeoutException
             Tasks.await(textRecognizer.process(image), TIMEOUT_SECONDS, TimeUnit.SECONDS)
         } catch (e: Exception) {
-            Log.e(TAG, "OCR失败: ${e.message}")
+            AppLog.e("OcrProcessor", "OCR失败: ${e.message}")
             return results
         }
 
@@ -412,7 +411,7 @@ class OcrProcessor(private val context: Context) {
                 mapRectBack(it, rectBitmapWidth, rectBitmapHeight, origWidth, origHeight, degrees)
             }
             results.add(OcrResult(mergedText, originalBox, avgConfidence, isVerticalBlock))
-            Log.d(TAG, "识别: $mergedText (置信度: $avgConfidence, 竖向: $isVerticalBlock)")
+            AppLog.d("OcrProcessor", "识别: $mergedText (置信度: $avgConfidence, 竖向: $isVerticalBlock)")
         }
         return results
     }
@@ -488,7 +487,7 @@ class OcrProcessor(private val context: Context) {
         try {
             textRecognizer.close()
         } catch (e: Exception) {
-            Log.w(TAG, "TextRecognizer close 异常: ${e.message}")
+            AppLog.w("OcrProcessor", "TextRecognizer close 异常: ${e.message}")
         }
     }
 }

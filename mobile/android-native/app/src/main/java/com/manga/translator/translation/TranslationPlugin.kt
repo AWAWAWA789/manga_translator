@@ -2,14 +2,13 @@ package com.manga.translator.translation
 
 import android.content.Context
 import android.content.SharedPreferences
-import android.util.Log
 import android.util.LruCache
 import com.manga.translator.domain.translation.Translator
+import com.manga.translator.util.AppLog
 
 class TranslationPlugin(private val context: Context) : Translator {
 
     companion object {
-        private const val TAG = "TranslationPlugin"
         private const val PREFS_NAME = "translation_config"
         private const val KEY_DEFAULT_TRANSLATOR = "default_translator"
         private const val MAX_CACHE_SIZE = 500
@@ -63,7 +62,7 @@ class TranslationPlugin(private val context: Context) : Translator {
 
     override fun translate(text: String): String {
         translationCache.get(text)?.let {
-            Log.d(TAG, "命中缓存")
+            AppLog.d("TranslationPlugin", "命中缓存")
             return it
         }
 
@@ -96,7 +95,7 @@ class TranslationPlugin(private val context: Context) : Translator {
         for (i in texts.indices) {
             val cached = translationCache.get(texts[i])
             if (cached != null) {
-                Log.d(TAG, "批量翻译命中缓存")
+                AppLog.d("TranslationPlugin", "批量翻译命中缓存")
                 cachedResults[i] = cached
             } else {
                 pendingTexts.add(texts[i])
@@ -107,7 +106,7 @@ class TranslationPlugin(private val context: Context) : Translator {
         if (pendingTexts.isNotEmpty()) {
             val translated = doTranslateBatch(pendingTexts)
             val finalTranslated = if (translated.all { it.startsWith("翻译失败") } && baiduTranslator.isConfigured()) {
-                Log.d(TAG, "MiMo批量失败，回退百度翻译")
+                AppLog.d("TranslationPlugin", "MiMo批量失败，回退百度翻译")
                 // 走 translate() 复用缓存，避免对已缓存的文本重复请求
                 pendingTexts.map { translate(it) }
             } else {
@@ -178,7 +177,7 @@ class TranslationPlugin(private val context: Context) : Translator {
         }
 
         if (badIndices.isNotEmpty() && baiduTranslator.isConfigured()) {
-            Log.d(TAG, "翻译质量异常 ${badIndices.size} 条，回退逐条翻译")
+            AppLog.d("TranslationPlugin", "翻译质量异常 ${badIndices.size} 条，回退逐条翻译")
             for (i in badIndices) {
                 val original = originals[i]
                 // 走 translate() 而非 baiduTranslator.translate()，以复用 LRU 缓存
@@ -205,23 +204,23 @@ class TranslationPlugin(private val context: Context) : Translator {
 
         return when {
             preferred == TranslatorType.MIMO && mimoTranslator.isConfigured() -> {
-                Log.d(TAG, "使用MiMo翻译")
+                AppLog.d("TranslationPlugin", "使用MiMo翻译")
                 mimoTranslator.translate(text)
             }
             preferred == TranslatorType.BAIDU && baiduTranslator.isConfigured() -> {
-                Log.d(TAG, "使用百度翻译")
+                AppLog.d("TranslationPlugin", "使用百度翻译")
                 baiduTranslator.translate(text)
             }
             mimoTranslator.isConfigured() -> {
-                Log.d(TAG, "MiMo可用，使用MiMo翻译")
+                AppLog.d("TranslationPlugin", "MiMo可用，使用MiMo翻译")
                 mimoTranslator.translate(text)
             }
             baiduTranslator.isConfigured() -> {
-                Log.d(TAG, "百度可用，使用百度翻译")
+                AppLog.d("TranslationPlugin", "百度可用，使用百度翻译")
                 baiduTranslator.translate(text)
             }
             else -> {
-                Log.e(TAG, "没有可用的翻译器")
+                AppLog.e("TranslationPlugin", "没有可用的翻译器")
                 "请配置百度或MiMo翻译API"
             }
         }
@@ -232,23 +231,23 @@ class TranslationPlugin(private val context: Context) : Translator {
 
         return when {
             preferred == TranslatorType.MIMO && mimoTranslator.isConfigured() -> {
-                Log.d(TAG, "使用MiMo批量翻译")
+                AppLog.d("TranslationPlugin", "使用MiMo批量翻译")
                 mimoTranslator.translateBatch(texts)
             }
             preferred == TranslatorType.BAIDU && baiduTranslator.isConfigured() -> {
-                Log.d(TAG, "使用百度逐条翻译")
+                AppLog.d("TranslationPlugin", "使用百度逐条翻译")
                 texts.map { baiduTranslator.translate(it) }
             }
             mimoTranslator.isConfigured() -> {
-                Log.d(TAG, "MiMo可用，使用MiMo批量翻译")
+                AppLog.d("TranslationPlugin", "MiMo可用，使用MiMo批量翻译")
                 mimoTranslator.translateBatch(texts)
             }
             baiduTranslator.isConfigured() -> {
-                Log.d(TAG, "百度可用，使用百度逐条翻译")
+                AppLog.d("TranslationPlugin", "百度可用，使用百度逐条翻译")
                 texts.map { baiduTranslator.translate(it) }
             }
             else -> {
-                Log.e(TAG, "没有可用的翻译器")
+                AppLog.e("TranslationPlugin", "没有可用的翻译器")
                 texts.map { "请配置百度或MiMo翻译API" }
             }
         }

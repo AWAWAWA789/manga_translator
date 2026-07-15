@@ -3,7 +3,6 @@ package com.manga.translator.plugin
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Rect
-import android.util.Log
 import com.manga.translator.debug.DebugOverlayData
 import com.manga.translator.domain.detection.BubbleInfo
 import com.manga.translator.domain.detection.PanelInfo
@@ -11,6 +10,7 @@ import com.manga.translator.domain.translation.TranslationRepository
 import com.manga.translator.model.OcrBlock
 import com.manga.translator.model.TranslationCard
 import com.manga.translator.translation.TranslationPlugin
+import com.manga.translator.util.AppLog
 import com.manga.translator.util.ComicImageCropper
 import com.manga.translator.util.OpenCVHelper
 import com.manga.translator.util.ScreenCropConfig
@@ -29,7 +29,6 @@ import kotlin.math.abs
 class PluginManager(private val context: Context) : TranslationRepository {
 
     companion object {
-        private const val TAG = "PluginManager"
         private const val MIN_REGION_AREA = 450
         private const val MAX_REGION_AREA_RATIO = 0.22f
         private const val MAX_TRANSLATION_REGIONS = 18
@@ -75,7 +74,7 @@ class PluginManager(private val context: Context) : TranslationRepository {
         }
 
         isInitialized = true
-        Log.d(TAG, "插件管理器初始化完成")
+        AppLog.d("PluginManager", "插件管理器初始化完成")
     }
 
     /**
@@ -99,30 +98,30 @@ class PluginManager(private val context: Context) : TranslationRepository {
         isManual: Boolean = false,
     ): List<TranslationCard> = synchronized(translateLock) {
         if (!isInitialized) {
-            Log.e(TAG, "插件管理器未初始化")
+            AppLog.e("PluginManager", "插件管理器未初始化")
             return emptyList()
         }
 
-        Log.d(TAG, "开始翻译图片: ${bitmap.width}x${bitmap.height}")
-        Log.d(TAG, "=== PluginManager v3 已加载 ===")
+        AppLog.d("PluginManager", "开始翻译图片: ${bitmap.width}x${bitmap.height}")
+        AppLog.d("PluginManager", "=== PluginManager v3 已加载 ===")
 
         val cropRect = ComicImageCropper.getCropRect(bitmap.width, bitmap.height, cropConfig)
         val croppedBitmap = ComicImageCropper.cropComicArea(bitmap, cropConfig)
-        Log.d(TAG, "裁剪后: ${croppedBitmap.width}x${croppedBitmap.height}")
+        AppLog.d("PluginManager", "裁剪后: ${croppedBitmap.width}x${croppedBitmap.height}")
 
         try {
             // AI 多模态路径：手动翻译 + AI开启 + MiMo已配置
             if (isManual && useAiVisionMode && aiVisionPipeline.isMiMoConfigured()) {
                 try {
-                    Log.d(TAG, "使用AI多模态识别")
+                    AppLog.d("PluginManager", "使用AI多模态识别")
                     val aiResult = aiVisionPipeline.analyzeImage(croppedBitmap, croppedBitmap.width, croppedBitmap.height)
                     // 检查解析错误：parseResponse 失败时返回带 error 的结果，需回退 OCR 流程
                     if (aiResult.error != null) {
-                        Log.w(TAG, "AI响应解析失败，回退OCR流程: ${aiResult.error}")
+                        AppLog.w("PluginManager", "AI响应解析失败，回退OCR流程: ${aiResult.error}")
                     } else {
                         val rawCards = aiVisionPipeline.toTranslationCards(aiResult, lastTranslationRects)
                         val cards = rawCards.map { card -> card.withOffset(cropRect.left, cropRect.top) }
-                        Log.d(TAG, "AI多模态: ${cards.size} 个翻译结果")
+                        AppLog.d("PluginManager", "AI多模态: ${cards.size} 个翻译结果")
                         // 用本次 AI 结果构建调试覆盖数据（裁剪坐标系，再统一应用偏移）
                         lastDebugData = DebugOverlayData(
                             bubbles = emptyList(),
@@ -133,7 +132,7 @@ class PluginManager(private val context: Context) : TranslationRepository {
                         return cards
                     }
                 } catch (e: Exception) {
-                    Log.e(TAG, "AI多模态失败，回退现有流程: ${e.message}")
+                    AppLog.e("PluginManager", "AI多模态失败，回退现有流程: ${e.message}")
                     // 继续走下面的现有流程
                 }
             }
@@ -143,24 +142,24 @@ class PluginManager(private val context: Context) : TranslationRepository {
             } else {
                 emptyList()
             }
-            Log.d(TAG, "分镜检测: ${panels.size} 个分镜")
+            AppLog.d("PluginManager", "分镜检测: ${panels.size} 个分镜")
 
             val bubbles = if (OpenCVHelper.isInitialized()) {
                 bubbleDetector.detectBubbles(croppedBitmap)
             } else {
                 emptyList()
             }
-            Log.d(TAG, "气泡检测: ${bubbles.size} 个气泡")
+            AppLog.d("PluginManager", "气泡检测: ${bubbles.size} 个气泡")
 
             val ocrBlocks = ocrPlugin.recognize(croppedBitmap, verticalOnly)
-            Log.d(TAG, "OCR识别: ${ocrBlocks.size} 个块")
+            AppLog.d("PluginManager", "OCR识别: ${ocrBlocks.size} 个块")
 
             val textFilteredBlocks = ocrBlocks.filter { TextFilter.isValidOcrText(it.text) }
-            Log.d(TAG, "文本过滤后: ${textFilteredBlocks.size} 个块")
+            AppLog.d("PluginManager", "文本过滤后: ${textFilteredBlocks.size} 个块")
 
             val filteredBlocks = textFilteredBlocks
                 .filter { block -> !overlapsAnyTranslationRect(block.rect, lastTranslationRects, cropRect) }
-            Log.d(TAG, "覆盖层过滤后: ${filteredBlocks.size} 个块")
+            AppLog.d("PluginManager", "覆盖层过滤后: ${filteredBlocks.size} 个块")
 
             val translatedCropResult = translateCore(
                 panels = panels,
@@ -215,7 +214,10 @@ class PluginManager(private val context: Context) : TranslationRepository {
         )
 
         val limitedRegions = limitRegions(regions)
-        Log.d(TAG, "=== 句子优先: 输入${ocrBlocks.size}块, 句子${sentenceRegions.size}个, 去重${regions.size}, 最终${limitedRegions.size}区域 ===")
+        AppLog.d(
+            "PluginManager",
+            "=== 句子优先: 输入${ocrBlocks.size}块, 句子${sentenceRegions.size}个, 去重${regions.size}, 最终${limitedRegions.size}区域 ===",
+        )
 
         val translatedTexts = translationPlugin.translateBatch(limitedRegions.map { it.text })
         return limitedRegions.mapIndexed { index, region ->
@@ -236,7 +238,7 @@ class PluginManager(private val context: Context) : TranslationRepository {
     ): List<TextRegion> {
         val blocks = dedupeBlocksInBubble(ocrBlocks)
         val sentenceGroups = sentenceAssembler.assemble(blocks)
-        Log.d(TAG, "句子优先组装: ${ocrBlocks.size}块→去重${blocks.size}块→${sentenceGroups.size}句")
+        AppLog.d("PluginManager", "句子优先组装: ${ocrBlocks.size}块→去重${blocks.size}块→${sentenceGroups.size}句")
 
         return sentenceGroups.mapNotNull { sentenceBlocks ->
             val textRect = unionRects(sentenceBlocks.map { it.rect })
@@ -254,8 +256,8 @@ class PluginManager(private val context: Context) : TranslationRepository {
         val blockSummary = blocks.joinToString(" | ") { block ->
             "${block.text.trim()}@[${block.rect.left},${block.rect.top},${block.rect.right},${block.rect.bottom}]"
         }
-        Log.d(
-            TAG,
+        AppLog.d(
+            "PluginManager",
             "句子调试: text='${region.text}' anchor=[${region.outputRect.centerX()},${region.outputRect.centerY()}] textRect=${region.textRect.toShortString()} out=${region.outputRect.toShortString()} blocks=$blockSummary",
         )
     }
@@ -327,8 +329,8 @@ class PluginManager(private val context: Context) : TranslationRepository {
             val dy = abs(block.rect.centerY() - textRect.centerY()).toFloat()
             dx + dy - block.confidence * 40f
         } ?: blocks.first()
-        Log.d(
-            TAG,
+        AppLog.d(
+            "PluginManager",
             "锚点选择: textRect=${textRect.toShortString()} anchor='${anchor.text.trim()}' rect=${anchor.rect.toShortString()} conf=${anchor.confidence}",
         )
         return anchor
