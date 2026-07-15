@@ -1,9 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <network-security-config>
-    <!-- 允许 HTTP 请求（用于本地后端通信） -->
-    <base-config cleartextTrafficPermitted="true">
+    <!-- 默认禁止明文 HTTP 流量，强制 HTTPS 防止 API Key 明文传输 -->
+    <base-config cleartextTrafficPermitted="false">
         <trust-anchors>
             <certificates src="system" />
         </trust-anchors>
     </base-config>
+    <!-- 本地调试例外：仅允许 localhost / 127.0.0.1 走 HTTP -->
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">localhost</domain>
+        <domain includeSubdomains="false">127.0.0.1</domain>
+    </domain-config>
 </network-security-config>
