@@ -7,7 +7,23 @@ Android 漫画屏幕翻译工具，目标是实现：
 - 翻译结果覆盖显示在原文位置附近
 - 尽量减少干扰，保留原图阅读体验
 
-当前版本：`4.38`
+当前版本：`5.00`
+
+---
+
+## v5.00 主要变化
+
+这一版做了四个阶段的系统性改造，重点解决了之前版本的资源泄漏、ANR、架构耦合和安全合规问题：
+
+- **稳定性**：修复 5 处 Bitmap 泄漏 + onDestroy ANR + PluginManager 并发竞态
+- **架构**：PluginManager 拆分为 TranslationController（presentation）+ PluginManager（data，实现 TranslationRepository），引入领域接口和 ServiceLocator 手动 DI
+- **协程**：Service/Activity 层迁移到协程（appScope + serviceScope），结构化并发替代 Thread/Executor
+- **安全**：HTTPS 强制（cleartextTrafficPermitted=false）+ EncryptedSharedPreferences 加密失败检测 + 长文本走 POST
+- **可观测性**：统一 AppLog（Release 自动屏蔽 DEBUG）+ CrashHandler 本地崩溃日志 + PerfTracker 性能埋点
+- **CI**：GitHub Actions 自动跑 assembleDebug + ktlint + detekt + 单测 + 覆盖率报告
+- **minSdk**：从 24 提升到 26
+
+详细变更见 [CHANGELOG.md](CHANGELOG.md)。
 
 ---
 
@@ -257,23 +273,32 @@ FloatingWindowService
 
 ```
 app/src/main/java/com/manga/translator/
+├── MangaTranslatorApp.kt              # Application，初始化 DebugManager/通知渠道/CrashHandler
 ├── MainActivity.kt                    # 主入口，权限请求，服务启动
 ├── SettingsActivity.kt                # 设置页面，API 配置，AI 开关
 ├── debug/
 │   ├── DebugOverlayConfig.kt          # 调试覆盖层配置
 │   └── DebugOverlayData.kt            # 调试覆盖层数据
+├── di/
+│   └── ServiceLocator.kt              # 手动 DI 容器（v5.00 新增）
+├── domain/                            # 领域层接口（v5.00 新增，纯 Kotlin 无 Android 依赖）
+│   ├── detection/                     # BubbleDetectorInterface / PanelDetector
+│   ├── ocr/                           # OcrEngine
+│   └── translation/                   # Translator / TranslationRepository
 ├── model/
 │   ├── OcrBlock.kt                    # OCR 文本块（text, rect, confidence, isVertical）
 │   └── TranslationCard.kt            # 翻译卡片（originalText, translatedText, sourceRect, isVertical）
 ├── ocr/
 │   └── OcrProcessor.kt               # ML Kit OCR，多版本识别+去重+坐标修正
 ├── plugin/
-│   ├── AiVisionPipeline.kt           # AI 多模态全流程（新增）
+│   ├── AiVisionPipeline.kt           # AI 多模态全流程
 │   ├── BubbleDetector.kt             # OpenCV 气泡检测
 │   ├── OcrPlugin.kt                  # OCR 适配层
 │   ├── PanelDetector.kt              # OpenCV 分镜检测
-│   ├── PluginManager.kt              # 主流程编排（核心）
+│   ├── PluginManager.kt              # TranslationRepository 实现，翻译编排
 │   └── SentenceAssembler.kt          # OCR块→句子组装
+├── presentation/
+│   └── TranslationController.kt      # 翻译控制器（v5.00 新增，状态管理）
 ├── service/
 │   ├── FloatingWindowService.kt      # 悬浮球、菜单、覆盖层渲染
 │   ├── ScreenCaptureService.kt       # 截屏、画面变化检测、流程编排
@@ -283,8 +308,12 @@ app/src/main/java/com/manga/translator/
 │   ├── MimoTranslator.kt             # MiMo 翻译 API
 │   └── TranslationPlugin.kt          # 翻译编排（MiMo+百度+缓存）
 └── util/
+    ├── AppLog.kt                      # 统一日志（v5.00 新增，Release 屏蔽 DEBUG）
     ├── ComicImageCropper.kt           # 图片裁剪
+    ├── CrashHandler.kt                # 崩溃日志本地写入（v5.00 新增）
     ├── OpenCVHelper.kt               # OpenCV 初始化
+    ├── PerfTracker.kt                 # 性能埋点（v5.00 新增）
+    ├── SecurePrefs.kt                 # EncryptedSharedPreferences 封装
     ├── StringUtils.kt                # 字符串相似度工具（Levenshtein）
     └── TextFilter.kt                 # 文本过滤工具
 ```
@@ -413,8 +442,8 @@ onDraw()
 
 | 参数 | 值 | 说明 |
 |------|-----|------|
-| 版本号 | `4.38` | versionName |
-| versionCode | `438` | Android 构建版本 |
+| 版本号 | `5.00` | versionName |
+| versionCode | `500` | Android 构建版本 |
 | 默认识别方向 | 竖向 | `RecognitionDirection.VERTICAL` |
 | 最大翻译区域 | 18 | `MAX_TRANSLATION_REGIONS` |
 | OCR最小尺寸 | 1100 | 小图放大 |
@@ -459,10 +488,15 @@ onDraw()
 
 ## 日志查看
 
-建议使用 Android Studio Logcat 搜索：
+v5.00 起统一使用 AppLog，Release 包自动屏蔽 DEBUG 日志。建议使用 Android Studio Logcat 按模块名过滤：
 
 ```text
+# 核心模块
+ScreenCapture
 PluginManager
+TranslationPlugin
+OcrProcessor
+MangaTranslator
 ```
 
 重点日志：
@@ -488,6 +522,45 @@ AI 失败日志：
 ```text
 AI多模态失败，回退现有流程: 错误信息
 ```
+
+### 性能日志（v5.00 新增）
+
+翻译流程各阶段耗时通过 PerfTracker 输出，总耗时或任一阶段 ≥ 3s 自动升级为 Warning：
+
+```text
+adb logcat | grep 性能
+```
+
+输出示例：
+
+```text
+[翻译][性能] 一次翻译流程 总耗时=1820ms
+  - OCR+翻译+渲染: 1820ms
+
+[PluginManager][性能] 翻译图片 总耗时=1650ms
+  - OCR识别: 820ms
+  - 翻译: 720ms
+```
+
+慢查询告警（≥3s）：
+
+```text
+W/PluginManager: [性能] 翻译图片 - OCR识别 慢查询: 3500ms
+```
+
+### 崩溃日志（v5.00 新增）
+
+应用崩溃后堆栈自动写入设备本地文件，便于事后排查：
+
+```bash
+# 列出崩溃日志
+adb shell run-as com.manga.translator ls files/crash/
+
+# 拉取具体崩溃文件
+adb shell run-as com.manga.translator cat files/crash/crash_<timestamp>.txt
+```
+
+日志包含：崩溃时间、线程名、设备型号、Android 版本、完整堆栈。
 
 ---
 
@@ -567,6 +640,7 @@ mobile/android-native
 
 | 版本 | 主要变化 |
 |------|----------|
+| v5.00 | 8周全面改造：止血期(Bitmap泄漏×5/onDestroy ANR/PluginManager竞态) + 架构重构(Controller/Repository拆分+领域接口+手动DI+协程迁移+minSdk26) + 安全合规(HTTPS强制+加密检测+OWASP) + 可观测性(AppLog/CrashHandler/PerfTracker) + GitHub Actions CI |
 | v4.38 | 全面代码审计修复(57项/19文件)：P0崩溃(OcrProcessor Bitmap use-after-free+坐标错位/DebugManager未初始化/executor关闭崩溃) + P1稳定性(suppressToken竞态/资源泄漏×4/加密兜底/HTTPS校验) + P2性能(去重O(n²)优化/StaticLayout缓存/锁竞争/Callback泄漏) + P3代码质量 |
 | v4.37 | 修复：实时翻译时长按菜单失效(isTouching检查，触摸期间跳过截图) |
 | v4.36 | 关键修复(P0)：实时翻译气泡反复闪烁(lastTranslatedHash语义错位，suppress期间同步含气泡哈希) |

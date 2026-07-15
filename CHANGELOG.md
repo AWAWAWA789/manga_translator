@@ -2,6 +2,79 @@
 
 ---
 
+## v5.00 - 2026-07-16
+
+### 8 周全面改造
+
+在 v4.38 基础上做了四个阶段的系统性改造，目标是把之前打地鼠式修 bug 的工作方式换成一次性把根因解决透。下面按阶段列一下做了什么。
+
+#### 阶段1：止血期（W1-W2）
+
+针对线上会崩、会卡、会泄漏的问题做了一轮集中修复：
+
+1. **ScreenCaptureService onDestroy ANR** — 原来在主线程 awaitTermination 阻塞 5 秒，改用 appScope.launch 异步清理，8 步严格释放顺序
+2. **Bitmap 泄漏 5 处** — `doOcrAndTranslate` / `captureAndProcess` / `processImage` / `AiVisionPipeline.bitmapToBase64` / `OcrProcessor.binarizeForOcr` 全部加 consumed 标志位 + finally 回收
+3. **Application 类缺失** — 新建 `MangaTranslatorApp`，提前初始化 DebugManager 和通知渠道，解决 START_STICKY 重建时 lateinit 崩溃
+4. **PluginManager 并发竞态** — 4 个可变状态加 `@Volatile`，translateImage 用 `synchronized(translateLock)` 串行化
+5. **TranslationPlugin 批量回退** — 拆分 translateBatch 为 MiMo/Baidu 两个方法，提取 validateAndFallback，hasRepeatedPatternStatic 提为静态方法便于单测
+6. **AI 路径坐标系错位** — bitmapToBase64 返回缩放比例，analyzeImage 用缩放后尺寸解析再统一除以 scale
+7. **Android 13 通知权限** — AndroidManifest 声明 POST_NOTIFICATIONS，MainActivity 运行时请求
+
+#### 阶段2：架构重构（W3-W5）
+
+把 PluginManager 这个 1000+ 行的上帝类拆开，引入分层和接口：
+
+1. **领域接口抽取** — 新建 `domain/` 目录，定义 `Translator` / `OcrEngine` / `BubbleDetectorInterface` / `PanelDetector` 等接口，纯 Kotlin 无 Android 依赖
+2. **PluginManager 拆分** — 拆为 `TranslationController`（presentation 层，管理状态）+ `PluginManager`（data 层，实现 TranslationRepository 接口），清理 26 个死方法 + 5 个冗余 public API
+3. **手动 DI 容器** — 新建 `ServiceLocator`，集中管理依赖创建，便于后续单测替换
+4. **协程基础设施** — `MangaTranslatorApp.appScope`（SupervisorJob + Default）+ `ScreenCaptureService.serviceScope`（SupervisorJob + IO），onDestroy 中 cancel()
+5. **协程迁移** — `onDestroy` 的 Thread.start → appScope.launch；`SettingsActivity` 的 Thread{} → lifecycleScope.launch（移除 runOnUiThread 模板代码）。OcrProcessor 的 6 线程池暂时保留，改 suspend 会动到领域接口
+6. **minSdk 24 → 26** — 移除 API 24-25 兼容代码，构建体积下降约 2MB
+7. **单元测试** — 新增 `TextFilterTest`（30+ 用例）+ `TranslationPluginTest`（6 用例覆盖重复检测/回退逻辑）+ `StringUtilsTest`。SentenceAssembler/PanelDetector 骨架已写，Robolectric SDK 下载导致 JVM 崩暂 @Ignore
+
+#### 阶段3：安全合规（W6）
+
+1. **HTTPS 强制** — `network_security_config.xml` 的 `cleartextTrafficPermitted` 从 true 改为 false，加 localhost domain-config 例外
+2. **密钥存储审计** — `SecurePrefs.isEncryptionFailed()` 之前从来没被调用，`SettingsActivity` 保存百度/MiMo 配置时检查加密失败，失败时 Toast 警告用户
+3. **输入校验** — 长文本翻译走 POST（原 GET），正则规范用 `\s{2,}` 而非 `\s+` 保留中英文间空格
+4. **OWASP 依赖扫描** — 集成 `dependency-check-gradle:9.0.9`，`failBuildOnCVSS=9.0`，配置 NVD API Key 环境变量注入。NVD 数据库因网络问题暂跳过，工具链就位待网络恢复
+
+#### 阶段4：可观测性 + CI（W7）
+
+1. **统一日志 AppLog** — 新建 `util/AppLog.kt`，Release 包通过 `BuildConfig.DEBUG` 自动屏蔽 DEBUG 日志。核心 4 模块（ScreenCaptureService 50 处 / PluginManager 18 处 / TranslationPlugin 14 处 / OcrProcessor 10 处）共 92 处 Log 调用替换为 AppLog，移除 3 个 private TAG 常量
+2. **崩溃监控 CrashHandler** — 新建 `util/CrashHandler.kt`，实现 `Thread.UncaughtExceptionHandler`，崩溃堆栈写入 `filesDir/crash/crash_yyyy-MM-dd_HH-mm-ss.txt`，含线程名/设备型号/Android 版本/完整堆栈。`MangaTranslatorApp.onCreate` 中初始化，交回系统默认处理器保留"应用已停止"对话框
+3. **性能埋点 PerfTracker** — 新建 `util/PerfTracker.kt`，start/end/finish 模式记录各阶段耗时，总耗时或任一阶段 ≥ 3s 自动升级 Warning。埋点位置：`ScreenCaptureService.processImage`（一次翻译流程）+ `PluginManager.translateImage`（AI多模态识别/OCR识别/翻译三阶段）
+4. **GitHub Actions CI** — 新建 `.github/workflows/ci.yml`：PR 触发 assembleDebug + ktlintCheck + detekt + testDebugUnitTest，主分支额外触发 jacocoTestReport + artifact 上传。JDK 17 + Gradle 8.10 + 缓存 + concurrency 取消旧运行
+
+#### 质量基础设施（W0）
+
+为上面所有改造提供度量基础：
+
+- ktlint 代码格式规范（`.editorconfig`）
+- detekt 静态分析 + baseline（`detekt.yml`、`detekt-baseline.xml`）
+- JaCoCo 覆盖率报告
+- JUnit 4 + Robolectric 测试环境
+
+#### 配置变化
+
+| 项 | v4.38 | v5.00 |
+|---|---|---|
+| minSdk | 24 | 26 |
+| targetSdk | 34 | 34 |
+| versionCode | 438 | 500 |
+| versionName | 4.38 | 5.00 |
+| AGP | 8.1.0 | 8.1.0 |
+| Gradle | 8.10 | 8.10 |
+
+#### 已知遗留
+
+- OcrProcessor 6 线程池未迁移协程（会动领域接口，留到下个版本）
+- 核心模块覆盖率未达 80% 门禁（Robolectric 环境受限，Service 层测不了）
+- OWASP NVD 数据库待网络恢复或申请到 API Key 后启用
+- detekt baseline 在 CI 干净环境会报 4 处 TooGenericExceptionCaught（已通过 allowedExceptionNameRegex 兼容 `e`/`_` 惯用名）
+
+---
+
 ## v4.38 - 2026-07-15
 
 ### 全面代码审计修复（57 项，覆盖 19 个文件）
