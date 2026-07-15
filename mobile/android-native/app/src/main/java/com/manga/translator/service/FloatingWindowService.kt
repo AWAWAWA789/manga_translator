@@ -6,7 +6,6 @@ import android.content.Intent
 import android.graphics.PixelFormat
 import android.graphics.Rect
 import android.graphics.drawable.GradientDrawable
-import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
@@ -660,12 +659,8 @@ class FloatingWindowService : Service() {
     }
 
     private fun getWindowType(): Int {
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-        } else {
-            @Suppress("DEPRECATION")
-            WindowManager.LayoutParams.TYPE_PHONE
-        }
+        // minSdk 26 后一律使用 TYPE_APPLICATION_OVERLAY
+        return WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
     }
 
     private fun cleanup() {

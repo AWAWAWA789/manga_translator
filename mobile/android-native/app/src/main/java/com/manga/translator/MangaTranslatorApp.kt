@@ -3,7 +3,6 @@ package com.manga.translator
 import android.app.Application
 import android.app.NotificationChannel
 import android.app.NotificationManager
-import android.os.Build
 import android.util.Log
 import com.manga.translator.debug.DebugManager
 import com.manga.translator.service.ScreenCaptureService
@@ -35,13 +34,12 @@ class MangaTranslatorApp : Application() {
     }
 
     private fun createScreenCaptureNotificationChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                ScreenCaptureService.CHANNEL_ID,
-                "屏幕翻译服务",
-                NotificationManager.IMPORTANCE_LOW,
-            )
-            getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
-        }
+        // minSdk 26 后通知渠道一律必须创建，无需版本判断
+        val channel = NotificationChannel(
+            ScreenCaptureService.CHANNEL_ID,
+            "屏幕翻译服务",
+            NotificationManager.IMPORTANCE_LOW,
+        )
+        getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
     }
 }

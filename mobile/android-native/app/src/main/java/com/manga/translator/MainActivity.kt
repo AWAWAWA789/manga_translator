@@ -220,12 +220,9 @@ class MainActivity : AppCompatActivity() {
         }
 
         // 异常保护：部分厂商 ROM 在后台启动受限时会抛 IllegalStateException / SecurityException
+        // minSdk 26 后 startForegroundService 一律可用，无需版本判断
         try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                startForegroundService(serviceIntent)
-            } else {
-                startService(serviceIntent)
-            }
+            startForegroundService(serviceIntent)
             Log.d(TAG, "屏幕截图服务已启动")
         } catch (e: Exception) {
             Log.e(TAG, "启动屏幕截图服务失败: ${e.message}", e)

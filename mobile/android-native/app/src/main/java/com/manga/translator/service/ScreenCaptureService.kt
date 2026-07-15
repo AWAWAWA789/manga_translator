@@ -952,10 +952,9 @@ class ScreenCaptureService : Service() {
     // ==================== 通知 ====================
 
     private fun createNotificationChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(CHANNEL_ID, "屏幕翻译服务", NotificationManager.IMPORTANCE_LOW)
-            getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
-        }
+        // minSdk 26 后通知渠道一律必须创建，无需版本判断
+        val channel = NotificationChannel(CHANNEL_ID, "屏幕翻译服务", NotificationManager.IMPORTANCE_LOW)
+        getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
     }
 
     private fun createNotification(): Notification {

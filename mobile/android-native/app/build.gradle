@@ -12,7 +12,7 @@ android {
 
     defaultConfig {
         applicationId "com.manga.translator"
-        minSdk 24
+        minSdk 26
         targetSdk 34
         versionCode 438
         versionName "4.38"
