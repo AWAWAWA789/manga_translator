@@ -140,18 +140,22 @@ class PluginManager(private val context: Context) : TranslationRepository {
                 }
             }
 
+            val panelStart = System.currentTimeMillis()
             val panels = if (OpenCVHelper.isInitialized()) {
                 panelDetector.detectPanels(croppedBitmap)
             } else {
                 emptyList()
             }
+            PerfTracker.record("PluginManager", "PanelDetect", System.currentTimeMillis() - panelStart)
             AppLog.d("PluginManager", "分镜检测: ${panels.size} 个分镜")
 
+            val bubbleStart = System.currentTimeMillis()
             val bubbles = if (OpenCVHelper.isInitialized()) {
                 bubbleDetector.detectBubbles(croppedBitmap)
             } else {
                 emptyList()
             }
+            PerfTracker.record("PluginManager", "BubbleDetect", System.currentTimeMillis() - bubbleStart)
             AppLog.d("PluginManager", "气泡检测: ${bubbles.size} 个气泡")
 
             val ocrBlocks = ocrPlugin.recognize(croppedBitmap, verticalOnly)
@@ -282,14 +286,17 @@ class PluginManager(private val context: Context) : TranslationRepository {
         if (bubbles.isEmpty()) return null
         val best = bubbles.maxByOrNull { bubble -> trustedBubbleScore(bubble.rect, textRect) } ?: return null
         val score = trustedBubbleScore(best.rect, textRect)
-        return if (score >= 0.45f) best.rect else null
+        // 阈值从 0.45 降到 0.40，提高气泡检出率，让更多文本能匹配到真实气泡框
+        return if (score >= 0.40f) best.rect else null
     }
 
     private fun trustedBubbleScore(bubbleRect: Rect, textRect: Rect): Float {
         val overlap = rectOverlapRatio(textRect, bubbleRect)
-        if (overlap > 0.35f) return 1f
+        // overlap 阈值从 0.35 降到 0.30，让轻微偏移的文本也能命中气泡
+        if (overlap > 0.30f) return 1f
         val expanded = Rect(bubbleRect)
-        expanded.inset((-bubbleRect.width() * 0.20f).toInt(), (-bubbleRect.height() * 0.20f).toInt())
+        // 扩大匹配范围从 20% 到 25%，覆盖气泡边缘检测不完整的情况
+        expanded.inset((-bubbleRect.width() * 0.25f).toInt(), (-bubbleRect.height() * 0.25f).toInt())
         if (Rect.intersects(expanded, textRect)) return 0.65f
         val dx = abs(textRect.centerX() - bubbleRect.centerX()).toFloat() / maxOf(1, bubbleRect.width())
         val dy = abs(textRect.centerY() - bubbleRect.centerY()).toFloat() / maxOf(1, bubbleRect.height())
@@ -314,9 +321,11 @@ class PluginManager(private val context: Context) : TranslationRepository {
         val textRect = unionRects(sorted.map { it.rect })
         val anchor = pickAnchorBlock(sorted, textRect)
         val estimated = if (bubbleRect != null) {
-            constrainRectToAnchor(estimateRectByAnchor(anchor.rect, textRect, isVertical), bubbleRect, anchor.rect, isVertical)
+            val est = estimateRectByAnchor(anchor.rect, textRect, isVertical, trustedBubble = bubbleRect)
+            constrainRectToAnchor(est, bubbleRect, anchor.rect, isVertical)
         } else {
-            constrainRectToAnchor(estimateRectByAnchor(anchor.rect, textRect, isVertical), boundsRect, anchor.rect, isVertical)
+            val est = estimateRectByAnchor(anchor.rect, textRect, isVertical, trustedBubble = null)
+            constrainRectToAnchor(est, boundsRect, anchor.rect, isVertical)
         }
         if (!isValidOutputRect(estimated, bitmap.width, bitmap.height)) return null
         return TextRegion(
@@ -342,7 +351,12 @@ class PluginManager(private val context: Context) : TranslationRepository {
         return anchor
     }
 
-    private fun estimateRectByAnchor(anchorRect: Rect, textRect: Rect, isVertical: Boolean): Rect {
+    private fun estimateRectByAnchor(anchorRect: Rect, textRect: Rect, isVertical: Boolean, trustedBubble: Rect? = null): Rect {
+        // 优先使用 BubbleDetector 检测到的气泡框，提升气泡定位准确性
+        if (trustedBubble != null) {
+            return Rect(trustedBubble)
+        }
+        // 无气泡框时回退到启发式估计：以锚点为中心，最小尺寸兜底
         val targetWidth = maxOf(textRect.width(), if (isVertical) 42 else 78)
         val targetHeight = maxOf(textRect.height(), if (isVertical) 88 else 36)
         val cx = anchorRect.centerX()

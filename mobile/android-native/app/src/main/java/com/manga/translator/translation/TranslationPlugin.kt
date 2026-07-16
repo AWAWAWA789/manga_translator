@@ -41,6 +41,11 @@ class TranslationPlugin(private val context: Context) : Translator {
     private val mimoTranslator = MimoTranslator(context)
     private val translationCache = LruCache<String, String>(MAX_CACHE_SIZE)
 
+    // 翻译回退专用线程池：批量失败/质量回退时并发逐条翻译，避免串行等待
+    private val fallbackExecutor = java.util.concurrent.Executors.newFixedThreadPool(4) { r ->
+        Thread(r, "TranslationFallback").apply { isDaemon = true }
+    }
+
     override fun isConfigured(): Boolean {
         return baiduTranslator.isConfigured() || mimoTranslator.isConfigured()
     }
@@ -107,8 +112,20 @@ class TranslationPlugin(private val context: Context) : Translator {
             val translated = doTranslateBatch(pendingTexts)
             val finalTranslated = if (translated.all { it.startsWith("翻译失败") } && baiduTranslator.isConfigured()) {
                 AppLog.d("TranslationPlugin", "MiMo批量失败，回退百度翻译")
-                // 走 translate() 复用缓存，避免对已缓存的文本重复请求
-                pendingTexts.map { translate(it) }
+                // 并发走 translate() 复用缓存，避免对已缓存的文本重复请求；单条超时 30s
+                pendingTexts.map { text ->
+                    java.util.concurrent.CompletableFuture.supplyAsync({ translate(text) }, fallbackExecutor)
+                }.map { future ->
+                    try {
+                        future.get(30, java.util.concurrent.TimeUnit.SECONDS)
+                    } catch (e: java.util.concurrent.TimeoutException) {
+                        AppLog.e("TranslationPlugin", "回退翻译超时")
+                        ""
+                    } catch (e: Exception) {
+                        AppLog.e("TranslationPlugin", "回退翻译异常: ${e.message}")
+                        ""
+                    }
+                }
             } else {
                 translated
             }
@@ -178,12 +195,27 @@ class TranslationPlugin(private val context: Context) : Translator {
 
         if (badIndices.isNotEmpty() && baiduTranslator.isConfigured()) {
             AppLog.d("TranslationPlugin", "翻译质量异常 ${badIndices.size} 条，回退逐条翻译")
-            for (i in badIndices) {
-                val original = originals[i]
-                // 走 translate() 而非 baiduTranslator.translate()，以复用 LRU 缓存
-                val fallback = translate(original)
+            // 并发执行逐条回退翻译，单条超时 30s；translate() 走 LRU 缓存避免重复请求
+            val futures = badIndices.map { idx ->
+                java.util.concurrent.CompletableFuture.supplyAsync({
+                    translate(originals[idx])
+                }, fallbackExecutor)
+            }
+            val fallbacks = futures.map { future ->
+                try {
+                    future.get(30, java.util.concurrent.TimeUnit.SECONDS)
+                } catch (e: java.util.concurrent.TimeoutException) {
+                    AppLog.e("TranslationPlugin", "回退翻译超时")
+                    ""
+                } catch (e: Exception) {
+                    AppLog.e("TranslationPlugin", "回退翻译异常: ${e.message}")
+                    ""
+                }
+            }
+            for ((i, idx) in badIndices.withIndex()) {
+                val fallback = fallbacks[i]
                 if (fallback.isNotEmpty() && !fallback.startsWith("翻译失败") && !hasRepeatedPattern(fallback)) {
-                    results[i] = fallback
+                    results[idx] = fallback
                 }
             }
         }
@@ -261,10 +293,11 @@ class TranslationPlugin(private val context: Context) : Translator {
     }
 
     /**
-     * 释放资源：清空翻译缓存。无 native 资源需释放。
+     * 释放资源：清空翻译缓存，关闭回退线程池。无 native 资源需释放。
      */
     fun close() {
         translationCache.evictAll()
+        fallbackExecutor.shutdown()
     }
 
     private fun putCache(key: String, value: String) {

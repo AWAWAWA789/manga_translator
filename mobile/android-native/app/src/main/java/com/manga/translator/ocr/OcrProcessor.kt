@@ -14,6 +14,7 @@ import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.TextRecognizer
 import com.google.mlkit.vision.text.japanese.JapaneseTextRecognizerOptions
 import com.manga.translator.util.AppLog
+import com.manga.translator.util.PerfTracker
 import com.manga.translator.util.TextFilter
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.TimeUnit
@@ -32,7 +33,7 @@ class OcrProcessor(private val context: Context) {
         private const val CROP_TOP_RATIO = 0.0f
         private const val CROP_BOTTOM_RATIO = 1.0f
 
-        // OCR 专用线程池：6 遍识别全并行，避免横向/竖向串行等待
+        // OCR 专用线程池：保持 6 线程并行能力，提交 4 遍任务（enhanced/binary × 0°/90°）
         private val ocrExecutor = java.util.concurrent.Executors.newFixedThreadPool(6) { r ->
             Thread(r, "OcrWorker").apply { isDaemon = true }
         }
@@ -57,6 +58,7 @@ class OcrProcessor(private val context: Context) {
             AppLog.w("OcrProcessor", "recognizeText 收到零尺寸 Bitmap: ${bitmap.width}x${bitmap.height}")
             return emptyList()
         }
+        val totalStart = System.currentTimeMillis()
         AppLog.d("OcrProcessor", "开始OCR识别，图片尺寸: ${bitmap.width}x${bitmap.height}，模式: ${if (verticalOnly) "竖向" else "横向"}")
 
         val cropTop = (bitmap.height * CROP_TOP_RATIO).toInt()
@@ -65,47 +67,49 @@ class OcrProcessor(private val context: Context) {
         AppLog.d("OcrProcessor", "裁剪区域: top=$cropTop, bottom=$cropBottom")
 
         val scaledBitmap = ensureMinSize(croppedBitmap, 1100)
-        val enhancedBitmap = enhanceForOcr(scaledBitmap, 1.6f)
+        val enhancedBitmap = enhanceForOcr(scaledBitmap, 1.8f)
         val binaryBitmap = binarizeForOcr(scaledBitmap)
 
         try {
-            // 6 遍全并行策略：每个版本(enhanced/raw/binary) × 每个方向(0°/90°) 独立提交到线程池
-            // 相比旧的"横竖向并行但内部串行"，总耗时从 3×15s=45s 降至 max(15s)=15s
+            // 4 遍全并行策略：每个版本(enhanced/binary) × 每个方向(0°/90°) 独立提交到线程池
+            // 去除 raw 遍（对清晰文本贡献小），保留 enhanced 和 binary 以提升质量
             // 注意：ML Kit TextRecognizer 内部是线程安全的，可并发调用 process()
             val futures = mutableListOf<CompletableFuture<List<OcrResult>>>()
 
-            // 竖向版本（90° 旋转）
+            // 竖向版本（90° 旋转）：enhanced + binary
             futures.add(
                 CompletableFuture.supplyAsync({
-                    recognizeWithRotation(enhancedBitmap, 90f, scaledBitmap.width, scaledBitmap.height)
+                    val variantStart = System.currentTimeMillis()
+                    val result = recognizeWithRotation(enhancedBitmap, 90f, scaledBitmap.width, scaledBitmap.height)
+                    PerfTracker.record("OcrProcessor", "OcrVariant_enhanced_90", System.currentTimeMillis() - variantStart)
+                    result
                 }, ocrExecutor),
             )
             futures.add(
                 CompletableFuture.supplyAsync({
-                    recognizeWithRotation(scaledBitmap, 90f, scaledBitmap.width, scaledBitmap.height)
-                }, ocrExecutor),
-            )
-            futures.add(
-                CompletableFuture.supplyAsync({
-                    recognizeWithRotation(binaryBitmap, 90f, scaledBitmap.width, scaledBitmap.height)
+                    val variantStart = System.currentTimeMillis()
+                    val result = recognizeWithRotation(binaryBitmap, 90f, scaledBitmap.width, scaledBitmap.height)
+                    PerfTracker.record("OcrProcessor", "OcrVariant_binary_90", System.currentTimeMillis() - variantStart)
+                    result
                 }, ocrExecutor),
             )
 
-            // 横向版本（0°）仅在非竖向模式时执行
+            // 横向版本（0°）仅在非竖向模式时执行：enhanced + binary
             if (!verticalOnly) {
                 futures.add(
                     CompletableFuture.supplyAsync({
-                        recognizeWithRotation(enhancedBitmap, 0f, scaledBitmap.width, scaledBitmap.height)
+                        val variantStart = System.currentTimeMillis()
+                        val result = recognizeWithRotation(enhancedBitmap, 0f, scaledBitmap.width, scaledBitmap.height)
+                        PerfTracker.record("OcrProcessor", "OcrVariant_enhanced_0", System.currentTimeMillis() - variantStart)
+                        result
                     }, ocrExecutor),
                 )
                 futures.add(
                     CompletableFuture.supplyAsync({
-                        recognizeWithRotation(scaledBitmap, 0f, scaledBitmap.width, scaledBitmap.height)
-                    }, ocrExecutor),
-                )
-                futures.add(
-                    CompletableFuture.supplyAsync({
-                        recognizeWithRotation(binaryBitmap, 0f, scaledBitmap.width, scaledBitmap.height)
+                        val variantStart = System.currentTimeMillis()
+                        val result = recognizeWithRotation(binaryBitmap, 0f, scaledBitmap.width, scaledBitmap.height)
+                        PerfTracker.record("OcrProcessor", "OcrVariant_binary_0", System.currentTimeMillis() - variantStart)
+                        result
                     }, ocrExecutor),
                 )
             }
@@ -143,6 +147,7 @@ class OcrProcessor(private val context: Context) {
             }
 
             AppLog.d("OcrProcessor", "最终结果: ${scaledResults.size} 个")
+            PerfTracker.record("OcrProcessor", "OcrTotal", System.currentTimeMillis() - totalStart)
             return scaledResults
         } finally {
             if (enhancedBitmap !== scaledBitmap) try { enhancedBitmap.recycle() } catch (_: Exception) {}
@@ -257,25 +262,50 @@ class OcrProcessor(private val context: Context) {
             val pixels = IntArray(targetWidth * targetHeight)
             source.getPixels(pixels, 0, targetWidth, 0, 0, targetWidth, targetHeight)
 
-            var sum = 0L
-            for (pixel in pixels) {
-                val r = (pixel shr 16) and 0xFF
-                val g = (pixel shr 8) and 0xFF
-                val b = pixel and 0xFF
-                sum += (r * 30 + g * 59 + b * 11) / 100
-            }
-            val avg = if (pixels.isEmpty()) 128 else (sum / pixels.size).toInt()
-            // 放宽阈值范围，避免极端图像（全黑/全白背景漫画）被强制使用 120 或 205 导致 OCR 失效
-            val threshold = avg.coerceIn(80, 220)
+            // 自适应阈值窗口大小：根据漫画文字尺寸调整。
+            // 窗口过小会丢失大字、切分笔画；过大会保留过多背景噪声（如半色调网点）。
+            // 取图像短边的 1/25，并限制在 [15, 51] 区间，覆盖常见漫画字号。
+            val windowSize = (min(targetWidth, targetHeight) / 25).coerceIn(15, 51)
+            val halfWindow = windowSize / 2
+            // 偏移常量 C：阈值 = 局部均值 - C，C=12 让文字笔画更黑、背景更白
+            val c = 12
 
-            for (i in pixels.indices) {
-                val pixel = pixels[i]
-                val r = (pixel shr 16) and 0xFF
-                val g = (pixel shr 8) and 0xFF
-                val b = pixel and 0xFF
-                val gray = (r * 30 + g * 59 + b * 11) / 100
-                val v = if (gray < threshold) 0 else 255
-                pixels[i] = 0xFF000000.toInt() or (v shl 16) or (v shl 8) or v
+            // 积分图：用于 O(1) 计算任意矩形窗口内灰度均值
+            // 索引 integral[(y+1)*(W+1) + (x+1)] 存放 gray[0..y][0..x] 的累加和
+            val integral = IntArray((targetWidth + 1) * (targetHeight + 1))
+            for (y in 0 until targetHeight) {
+                var rowSum = 0
+                for (x in 0 until targetWidth) {
+                    val pixel = pixels[y * targetWidth + x]
+                    val r = (pixel shr 16) and 0xFF
+                    val g = (pixel shr 8) and 0xFF
+                    val b = pixel and 0xFF
+                    rowSum += (r * 30 + g * 59 + b * 11) / 100
+                    integral[(y + 1) * (targetWidth + 1) + (x + 1)] =
+                        integral[y * (targetWidth + 1) + (x + 1)] + rowSum
+                }
+            }
+
+            for (y in 0 until targetHeight) {
+                val y1 = max(0, y - halfWindow)
+                val y2 = min(targetHeight - 1, y + halfWindow)
+                for (x in 0 until targetWidth) {
+                    val x1 = max(0, x - halfWindow)
+                    val x2 = min(targetWidth - 1, x + halfWindow)
+                    val area = (x2 - x1 + 1) * (y2 - y1 + 1)
+                    val sum = integral[(y2 + 1) * (targetWidth + 1) + (x2 + 1)] -
+                        integral[y1 * (targetWidth + 1) + (x2 + 1)] -
+                        integral[(y2 + 1) * (targetWidth + 1) + x1] +
+                        integral[y1 * (targetWidth + 1) + x1]
+                    val localMean = sum / area
+                    val pixel = pixels[y * targetWidth + x]
+                    val r = (pixel shr 16) and 0xFF
+                    val g = (pixel shr 8) and 0xFF
+                    val b = pixel and 0xFF
+                    val gray = (r * 30 + g * 59 + b * 11) / 100
+                    val v = if (gray < localMean - c) 0 else 255
+                    pixels[y * targetWidth + x] = 0xFF000000.toInt() or (v shl 16) or (v shl 8) or v
+                }
             }
 
             result.setPixels(pixels, 0, targetWidth, 0, 0, targetWidth, targetHeight)
@@ -377,9 +407,13 @@ class OcrProcessor(private val context: Context) {
 
             if (lineInfos.isEmpty()) continue
 
-            val isVerticalBlock = blockBoundingBox?.let {
-                it.height() > it.width() * 1.5
-            } ?: false
+            // 改用 line 级判定：当 ML Kit block 包含多个相邻竖列时，并集 bounding box 宽度被撑大，
+            // 用 blockBoundingBox 的 height > width * 1.5 会误判为横向。
+            // 改为统计 block 内每个 line 的方向，多数 line 为竖向则视为竖向 block。
+            // blockBoundingBox 的并集计算保留，仍用于后续 mapRectBack 等场景。
+            val isVerticalBlock = lines.isNotEmpty() && lines.count { line ->
+                line.boundingBox?.let { it.height() > it.width() * 1.5f } ?: false
+            } >= lines.size / 2
 
             val sortedLines = if (isVerticalBlock) {
                 lineInfos.sortedWith(

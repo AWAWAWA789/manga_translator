@@ -10,6 +10,7 @@ import com.google.gson.annotations.SerializedName
 import com.manga.translator.model.TranslationCard
 import com.manga.translator.translation.MimoTranslator
 import com.manga.translator.util.HttpClientProvider
+import com.manga.translator.util.PerfTracker
 import com.manga.translator.util.TextFilter
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Request
@@ -57,6 +58,7 @@ class AiVisionPipeline(private val context: Context) {
 
     fun analyzeImage(bitmap: Bitmap, imageWidth: Int, imageHeight: Int): AiAnalysisResult {
         Log.d(TAG, "开始AI多模态分析，图片尺寸: ${imageWidth}x$imageHeight")
+        val totalStart = System.currentTimeMillis()
 
         if (!mimoTranslator.isConfigured()) {
             throw IllegalStateException("MiMo API未配置")
@@ -67,7 +69,13 @@ class AiVisionPipeline(private val context: Context) {
         val scaledWidth = (imageWidth * scale).toInt().coerceAtLeast(1)
         val scaledHeight = (imageHeight * scale).toInt().coerceAtLeast(1)
         val prompt = buildPrompt(scaledWidth, scaledHeight)
-        val response = callMimoVisionApi(base64Image, prompt)
+        val response = try {
+            callMimoVisionApi(base64Image, prompt)
+        } catch (e: Exception) {
+            Log.w(TAG, "AI识别首次失败，3秒后重试: ${e.message}")
+            Thread.sleep(3000)
+            callMimoVisionApi(base64Image, prompt)
+        }
         val result = parseResponse(response, scaledWidth, scaledHeight)
 
         // 将坐标从缩放坐标系转换回原始坐标系
@@ -86,6 +94,7 @@ class AiVisionPipeline(private val context: Context) {
         val finalResult = result.copy(bubbles = scaledBackBubbles)
 
         Log.d(TAG, "AI识别到 ${finalResult.bubbles.size} 个气泡")
+        PerfTracker.record("AiVisionPipeline", "AiVisionTotal", System.currentTimeMillis() - totalStart)
         return finalResult
     }
 
@@ -133,8 +142,9 @@ class AiVisionPipeline(private val context: Context) {
         if (bitmap.width <= 0 || bitmap.height <= 0) {
             throw IllegalArgumentException("Bitmap 尺寸非法: ${bitmap.width}x${bitmap.height}")
         }
-        // 限制最大尺寸为 1536px，避免高分辨率截图产生超大 base64 字符串
-        val maxDim = 1536
+        val encodeStart = System.currentTimeMillis()
+        // 限制最大尺寸为 1024px，减少传输量加快响应（兼顾识别精度）
+        val maxDim = 1024
         val scale = if (bitmap.width > maxDim || bitmap.height > maxDim) {
             maxDim.toFloat() / maxOf(bitmap.width, bitmap.height)
         } else {
@@ -147,9 +157,11 @@ class AiVisionPipeline(private val context: Context) {
         }
         try {
             val outputStream = ByteArrayOutputStream()
-            source.compress(Bitmap.CompressFormat.JPEG, 85, outputStream)
+            source.compress(Bitmap.CompressFormat.JPEG, 75, outputStream)
             val byteArray = outputStream.toByteArray()
-            return Pair(Base64.encodeToString(byteArray, Base64.NO_WRAP), scale)
+            val base64 = Base64.encodeToString(byteArray, Base64.NO_WRAP)
+            PerfTracker.record("AiVisionPipeline", "BitmapToBase64", System.currentTimeMillis() - encodeStart)
+            return Pair(base64, scale)
         } finally {
             // 确保 scaled bitmap 在异常路径（OOM 等）也被回收
             if (source !== bitmap) {
@@ -163,16 +175,20 @@ class AiVisionPipeline(private val context: Context) {
     }
 
     private fun buildPrompt(imageWidth: Int, imageHeight: Int): String {
-        return """你是漫画翻译专家。请分析这张漫画图片：
+        return """你是专业的漫画翻译专家。请仔细分析这张漫画图片：
 
 任务：
-1. 识别图片中所有对话气泡的位置（像素坐标）
-2. 识别每个气泡内的日文原文
-3. 将日文翻译成自然中文
-4. 判断文字是竖排还是横排
-5. 按阅读顺序（日漫从右到左、从上到下）编号
+1. 识别图片中所有对话气泡和文字区域的位置（像素坐标），包括：
+   - 标准椭圆/圆形气泡
+   - 不规则形状气泡
+   - 旁白文字框（无气泡边框）
+   - 小气泡和角落文字
+2. 识别每个区域的日文原文，注意区分竖排和横排文字
+3. 判断文字方向：竖排（is_vertical=true）的标准是文字从上到下排列、多列时从右到左；横排为从左到右
+4. 将日文翻译成自然流畅的中文，保留漫画对白的语气和情感
+5. 按日漫阅读顺序编号（从右到左、从上到下）
 
-输出严格JSON格式，不要其他内容：
+输出严格JSON格式，不要包含任何其他文字：
 {
   "bubbles": [
     {
@@ -188,10 +204,13 @@ class AiVisionPipeline(private val context: Context) {
   ]
 }
 
-坐标基于图片尺寸 ${imageWidth}x$imageHeight。
-如果图片中没有对话气泡，返回 {"bubbles": []}。
-仔细识别所有气泡，包括小的、不规则形状的。
-翻译要自然流畅，保留漫画对白的语气。"""
+重要提示：
+- 坐标基于图片尺寸 ${imageWidth}x$imageHeight
+- 如果图片中没有对话气泡或文字，返回 {"bubbles": []}
+- 务必识别所有文字区域，不要遗漏小气泡
+- 翻译要自然流畅，符合中文漫画阅读习惯
+- 竖排文字的气泡通常高度大于宽度
+- 如果一个气泡内有多个独立文字区域，合并为一个气泡"""
     }
 
     private fun callMimoVisionApi(base64Image: String, prompt: String): String {
@@ -216,7 +235,7 @@ class AiVisionPipeline(private val context: Context) {
                 ),
             ),
             "temperature" to 0.1,
-            "max_tokens" to 8192,
+            "max_tokens" to 4096,
         )
 
         val requestBody = gson.toJson(request)
@@ -229,6 +248,7 @@ class AiVisionPipeline(private val context: Context) {
             .addHeader("Authorization", "Bearer $apiKey")
             .build()
 
+        val apiStart = System.currentTimeMillis()
         val response = client.newCall(httpRequest).execute()
         response.use { resp ->
             val responseBody = resp.body?.string() ?: throw Exception("响应为空")
@@ -243,18 +263,45 @@ class AiVisionPipeline(private val context: Context) {
                 throw Exception("MiMo错误: ${result.error.message}")
             }
 
-            return result.choices?.firstOrNull()?.message?.content
+            val content = result.choices?.firstOrNull()?.message?.content
                 ?: throw Exception("识别结果为空")
+            PerfTracker.record("AiVisionPipeline", "MiMoApiCall", System.currentTimeMillis() - apiStart)
+            return content
         }
+    }
+
+    /**
+     * 容错清洗 AI 返回的 JSON 文本：
+     * - 去除 Markdown 代码块标记（```json ... ``` 或 ``` ... ```）
+     * - 截取第一个 { 到最后一个 }，去除前后非 JSON 文字
+     * - 容忍单引号：替换为双引号（简单处理）
+     * - 容忍尾逗号：去除 } 或 ] 前的逗号
+     */
+    private fun cleanJsonResponse(response: String): String {
+        var s = response.trim()
+        // 去除 Markdown 代码块标记
+        if (s.startsWith("```")) {
+            s = s.removePrefix("```json").removePrefix("```JSON").removePrefix("```")
+            s = s.removeSuffix("```")
+            s = s.trim()
+        }
+        // 截取第一个 { 到最后一个 }，去除前后非 JSON 文字
+        val firstBrace = s.indexOf('{')
+        val lastBrace = s.lastIndexOf('}')
+        if (firstBrace >= 0 && lastBrace > firstBrace) {
+            s = s.substring(firstBrace, lastBrace + 1)
+        }
+        // 容忍单引号：替换为双引号（简单处理，不区分字符串内外）
+        s = s.replace("'", "\"")
+        // 容忍尾逗号：去除 } 或 ] 前的逗号（含中间空白）
+        s = s.replace(Regex(",\\s*}"), "}")
+        s = s.replace(Regex(",\\s*]"), "]")
+        return s
     }
 
     private fun parseResponse(response: String, imageWidth: Int, imageHeight: Int): AiAnalysisResult {
         return try {
-            val jsonStr = response.trim()
-                .removePrefix("```json")
-                .removePrefix("```")
-                .removeSuffix("```")
-                .trim()
+            val jsonStr = cleanJsonResponse(response)
 
             val result = gson.fromJson(jsonStr, AiDetectionResult::class.java)
 

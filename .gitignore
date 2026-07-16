@@ -50,8 +50,6 @@ logs/
 **/detekt-report.*
 **/ktlint-report.*
 
-# ===== 改造计划文档（本地维护，不入库）=====
+# ===== 改造计划文档 =====
 REFACTOR_PLAN.md
-
-# ===== Trae IDE 产物（本地维护，不入库）=====
 .trae/

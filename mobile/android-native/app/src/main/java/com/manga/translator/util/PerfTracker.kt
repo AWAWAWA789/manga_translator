@@ -64,5 +64,17 @@ class PerfTracker private constructor(
         fun start(module: String, operation: String): PerfTracker {
             return PerfTracker(module, operation, System.currentTimeMillis())
         }
+
+        /**
+         * 单点记录某阶段耗时（适用于并行任务或无需多检查点的场景）。
+         * 耗时 >= 3s 升级为 Warning（慢查询告警）。
+         */
+        fun record(module: String, stage: String, durationMs: Long) {
+            if (durationMs >= SLOW_THRESHOLD_MS) {
+                AppLog.w(module, "[性能] $stage 慢查询: ${durationMs}ms")
+            } else {
+                AppLog.d(module, "[性能] $stage: ${durationMs}ms")
+            }
+        }
     }
 }

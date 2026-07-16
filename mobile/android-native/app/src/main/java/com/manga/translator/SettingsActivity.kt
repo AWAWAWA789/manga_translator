@@ -1,9 +1,7 @@
 package com.manga.translator
 
 import android.app.AlertDialog
-import android.graphics.Color
 import android.os.Bundle
-import android.util.Log
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
@@ -16,12 +14,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 class SettingsActivity : AppCompatActivity() {
-
-    companion object {
-        private const val TAG = "MangaTranslator"
-        private const val PREFS_NAME = "translation_config"
-        private const val KEY_AI_BUBBLE_DETECTION = "ai_bubble_detection"
-    }
 
     private lateinit var binding: ActivitySettingsBinding
     private lateinit var translationPlugin: TranslationPlugin
@@ -61,11 +53,6 @@ class SettingsActivity : AppCompatActivity() {
         binding.btnSaveDefaultTranslator.setOnClickListener {
             saveDefaultTranslator()
         }
-
-        binding.switchAiBubbleDetection.setOnCheckedChangeListener { _, isChecked ->
-            saveAiBubbleDetectionSetting(isChecked)
-            updateAiBubbleDetectionStatus(isChecked)
-        }
     }
 
     private fun loadSettings() {
@@ -84,16 +71,6 @@ class SettingsActivity : AppCompatActivity() {
             TranslatorType.BAIDU -> binding.radioBaidu.isChecked = true
             TranslatorType.MIMO -> binding.radioMimo.isChecked = true
         }
-
-        val aiBubbleEnabled = loadAiBubbleDetectionSetting()
-        // 加载时临时置空监听器，避免设置 isChecked 时触发监听器造成冗余写盘
-        binding.switchAiBubbleDetection.setOnCheckedChangeListener(null)
-        binding.switchAiBubbleDetection.isChecked = aiBubbleEnabled
-        binding.switchAiBubbleDetection.setOnCheckedChangeListener { _, isChecked ->
-            saveAiBubbleDetectionSetting(isChecked)
-            updateAiBubbleDetectionStatus(isChecked)
-        }
-        updateAiBubbleDetectionStatus(aiBubbleEnabled)
 
         updateTranslatorStatus()
     }
@@ -233,30 +210,5 @@ class SettingsActivity : AppCompatActivity() {
                     .show()
             }
         }
-    }
-
-    private fun loadAiBubbleDetectionSetting(): Boolean {
-        val preferences = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-        return preferences.getBoolean(KEY_AI_BUBBLE_DETECTION, false)
-    }
-
-    private fun saveAiBubbleDetectionSetting(enabled: Boolean) {
-        val preferences = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-        preferences.edit()
-            .putBoolean(KEY_AI_BUBBLE_DETECTION, enabled)
-            .apply()
-        Log.d(TAG, "AI多模态识别设置已保存: $enabled")
-    }
-
-    private fun updateAiBubbleDetectionStatus(enabled: Boolean) {
-        val mimoConfigured = translationPlugin.getMimoTranslator().isConfigured()
-        binding.tvAiBubbleStatus.text = when {
-            !enabled -> "状态：已关闭"
-            !mimoConfigured -> "状态：已开启（需配置MiMo API）"
-            else -> "状态：已开启，手动翻译时使用AI多模态识别"
-        }
-        binding.tvAiBubbleStatus.setTextColor(
-            if (enabled && mimoConfigured) Color.parseColor("#4CAF50") else Color.parseColor("#666666"),
-        )
     }
 }

@@ -47,14 +47,6 @@ class ScreenCaptureService : Service() {
         const val EXTRA_DATA = "data"
         private const val NOTIFICATION_ID = 1001
         const val CHANNEL_ID = "screen_capture_channel"
-        private const val STABLE_DELAY_MS = 200L
-        private const val CAPTURE_INTERVAL_MS = 150L
-        private const val REQUIRED_STABLE_FRAMES = 2
-        private const val REQUIRED_MOVING_FRAMES = 2
-        private const val OVERLAY_CLEAR_DELAY_MS = 400L
-        private const val AUTO_COOLDOWN_MS = 2000L
-        private const val HASH_SAMPLE_STEP = 20 // 降低采样步长，提高检测精度
-        private const val HASH_CHANGE_THRESHOLD = 0.012f
     }
 
     private var mediaProjection: MediaProjection? = null
@@ -112,33 +104,10 @@ class ScreenCaptureService : Service() {
 
     private val isRunning = AtomicBoolean(false)
     private val isProcessing = AtomicBoolean(false)
-    private val isRealtimeEnabled = AtomicBoolean(false)
     private val isManualTranslating = AtomicBoolean(false)
 
-    private var lastFrameHash: Long = 0L
-
-    @Volatile private var isScreenStable = false
-    private var stableRunnable: Runnable? = null
-    private var captureLoopRunnable: Runnable? = null
-
-    @Volatile private var lastTranslatedHash: Long = 0L
-
-    @Volatile private var lastTranslationTimeMs = 0L
-    private var lastTranslationRects = mutableListOf<Rect>()
-
-    @Volatile private var stableFrameCount = 0
-
-    @Volatile private var movingFrameCount = 0
-
-    // 版本号用 AtomicLong 保证 ++ 操作原子性，防止主线程与 executor 线程并发递增丢失
-    private val screenChangeVersion = java.util.concurrent.atomic.AtomicLong(0L)
-
-    // 翻译覆盖层显示期间抑制变化检测，防止覆盖层出现/消失被误判为画面变化
-    @Volatile private var suppressChangeDetection = false
-
-    // suppressChangeDetection 重置 token：每次设置 suppress 时递增，延迟重置时校验 token 是否匹配，
-    // 防止连续翻译时第一次的重置提前结束第二次的抑制期
-    private val suppressToken = java.util.concurrent.atomic.AtomicLong(0L)
+    // 记录本次翻译流程开始时间，用于检测 isProcessing 卡死（8 秒超时强制重置）
+    private var processingStartTimeMs = 0L
 
     // 帧缓存：OnImageAvailableListener 持续消费帧，始终保持最新帧可用
     @Volatile private var cachedBitmap: Bitmap? = null
@@ -246,61 +215,6 @@ class ScreenCaptureService : Service() {
     }
 
     private fun setupCallbacks() {
-        FloatingWindowService.onModeChanged = { mode ->
-            when (mode) {
-                FloatingWindowService.Companion.TranslateMode.REALTIME -> {
-                    AppLog.d("ScreenCapture", "切换到实时翻译模式")
-                    isRealtimeEnabled.set(true)
-                    isManualTranslating.set(false)
-                    resetState()
-                    startContinuousCapture()
-                    handler?.postDelayed({
-                        if (isRunning.get() && isRealtimeEnabled.get() && !FloatingWindowService.isPaused) {
-                            FloatingWindowService.setStatusText("...")
-                            executeOneShotTranslation(isManual = false)
-                        }
-                    }, 500L)
-                }
-                FloatingWindowService.Companion.TranslateMode.MANUAL -> {
-                    AppLog.d("ScreenCapture", "切换到手动翻译模式")
-                    isRealtimeEnabled.set(false)
-                    isManualTranslating.set(false)
-                    stopContinuousCapture()
-                    FloatingWindowService.updateMainAppearance()
-                }
-            }
-        }
-
-        FloatingWindowService.onPauseChanged = { paused ->
-            AppLog.d("ScreenCapture", "暂停状态: $paused")
-            if (paused) {
-                isRealtimeEnabled.set(false)
-                stopContinuousCapture()
-            } else {
-                if (FloatingWindowService.currentMode == FloatingWindowService.Companion.TranslateMode.REALTIME) {
-                    isRealtimeEnabled.set(true)
-                    resetState()
-                    startContinuousCapture()
-                }
-            }
-        }
-
-        FloatingWindowService.onTouchStateChanged = { touching ->
-            // 只在实时模式下处理触摸状态变化
-            if (isRealtimeEnabled.get()) {
-                if (touching) {
-                    isScreenStable = false
-                    stableFrameCount = 0
-                    movingFrameCount = 0
-                    screenChangeVersion.incrementAndGet()
-                    cancelPendingTranslation()
-                } else {
-                    isScreenStable = false
-                    stableFrameCount = 0
-                }
-            }
-        }
-
         FloatingWindowService.onManualTranslate = {
             AppLog.d("ScreenCapture", "手动翻译触发")
             executeManualTranslation()
@@ -309,21 +223,7 @@ class ScreenCaptureService : Service() {
         FloatingWindowService.onRecognitionDirectionChanged = { direction ->
             AppLog.d("ScreenCapture", "识别方向变更: $direction")
             FloatingWindowService.clearAllTranslations()
-            if (isRealtimeEnabled.get() && !FloatingWindowService.isPaused) {
-                resetState()
-                scheduleStableCapture()
-            }
         }
-    }
-
-    private fun resetState() {
-        lastFrameHash = 0L
-        isScreenStable = false
-        stableFrameCount = 0
-        movingFrameCount = 0
-        screenChangeVersion.incrementAndGet()
-        lastTranslatedHash = 0L
-        cancelPendingTranslation()
     }
 
     private fun getScreenMetrics() {
@@ -498,43 +398,43 @@ class ScreenCaptureService : Service() {
     // ==================== 手动翻译（最高优先级）====================
 
     private fun executeManualTranslation() {
-        executeOneShotTranslation(isManual = true)
+        executeOneShotTranslation()
     }
 
-    private fun executeOneShotTranslation(isManual: Boolean) {
+    private fun executeOneShotTranslation() {
         if (!isRunning.get()) return
         if (!isProcessing.compareAndSet(false, true)) {
             AppLog.w("ScreenCapture", "已有翻译任务进行中，检查是否卡住")
             // Safety: force reset if stuck for too long
-            if (System.currentTimeMillis() - lastTranslationTimeMs > 8000) {
+            if (System.currentTimeMillis() - processingStartTimeMs > 8000) {
                 AppLog.w("ScreenCapture", "isProcessing 卡住超过8秒，强制重置")
                 isProcessing.set(false)
                 isManualTranslating.set(false)
                 restoreFloatingUiAfterCapture()
-                // Retry after reset：重试前必须再次校验运行/暂停状态，避免在用户暂停或服务停止后触发无意义截图
+                // Retry after reset：重试前必须再次校验运行状态，避免服务停止后触发无意义截图
                 handler?.postDelayed({
-                    if (isRunning.get() && !FloatingWindowService.isPaused) {
-                        executeOneShotTranslation(isManual)
+                    if (isRunning.get()) {
+                        executeOneShotTranslation()
                     } else {
-                        AppLog.d("ScreenCapture", "重试前状态已变更（running=${isRunning.get()}, paused=${FloatingWindowService.isPaused}），跳过重试")
+                        AppLog.d("ScreenCapture", "重试前状态已变更（running=${isRunning.get()}），跳过重试")
                     }
                 }, 200)
             }
             return
         }
-        isManualTranslating.set(isManual)
-        cancelPendingTranslation()
+        processingStartTimeMs = System.currentTimeMillis()
+        isManualTranslating.set(true)
         FloatingWindowService.clearAllTranslations()
         FloatingWindowService.setStatusText("...")
 
         FloatingWindowService.hideFloatingUI()
 
         // Wait until overlay removal is reflected in MediaProjection frames.
-        handler?.postDelayed({ doOneShotCapture(0, isManual) }, OVERLAY_CLEAR_DELAY_MS)
+        handler?.postDelayed({ doOneShotCapture(0) }, 400L)
     }
 
-    private fun doOneShotCapture(retryCount: Int, isManual: Boolean) {
-        if (!isRunning.get() || (isManual && !isManualTranslating.get())) {
+    private fun doOneShotCapture(retryCount: Int) {
+        if (!isRunning.get() || !isManualTranslating.get()) {
             isManualTranslating.set(false)
             isProcessing.set(false)
             restoreFloatingUiAfterCapture()
@@ -549,14 +449,14 @@ class ScreenCaptureService : Service() {
                     "doOneShotCapture retry=$retryCount, cachedBitmap=${cachedBitmap != null}, handlerThread alive=${captureHandlerThread?.isAlive}, lastFrameMs=$lastFrameTimeMs",
                 )
 
-                // 从帧缓存获取截图（OVERLAY_CLEAR_DELAY_MS 已在调用前等待）
+                // 从帧缓存获取截图（截图前已等待悬浮 UI 隐藏）
                 // 重建后首帧可能需要更长等待，逐步延长超时
                 val timeoutMs = if (retryCount == 0) 500L else 1000L
                 val bitmap = waitForFreshFrame(timeoutMs = timeoutMs, requireFresh = false)
 
                 if (bitmap != null) {
-                    AppLog.d("ScreenCapture", if (isManual) "手动翻译截图成功" else "自动单次翻译截图成功")
-                    handler?.post { processImage(bitmap, isManual) }
+                    AppLog.d("ScreenCapture", "手动翻译截图成功")
+                    handler?.post { processImage(bitmap) }
                     return@safeSubmit
                 }
 
@@ -572,7 +472,7 @@ class ScreenCaptureService : Service() {
                     }
                     // 重建后给 VirtualDisplay 更多时间渲染首帧（首帧通常需要 500-1000ms）
                     val delayMs = if (retryCount == 0) 800L else 500L
-                    handler?.postDelayed({ doOneShotCapture(retryCount + 1, isManual) }, delayMs)
+                    handler?.postDelayed({ doOneShotCapture(retryCount + 1) }, delayMs)
                 } else {
                     AppLog.e("ScreenCapture", "单次翻译失败：多次重试后仍无图像")
                     handler?.post {
@@ -601,199 +501,26 @@ class ScreenCaptureService : Service() {
         }, delayMs)
     }
 
-    // ==================== 持续截图 + 画面变化检测 ====================
-
-    private fun startContinuousCapture() {
-        stopContinuousCapture()
-        AppLog.d("ScreenCapture", "启动持续截图")
-        val runnable = object : Runnable {
-            override fun run() {
-                if (!isRunning.get()) return
-                if (!isManualTranslating.get() && !FloatingWindowService.isPaused && isRealtimeEnabled.get()) {
-                    checkScreenChange()
-                }
-                handler?.postDelayed(this, CAPTURE_INTERVAL_MS)
-            }
-        }
-        captureLoopRunnable = runnable
-        handler?.post(runnable)
-    }
-
-    private fun stopContinuousCapture() {
-        AppLog.d("ScreenCapture", "停止持续截图")
-        captureLoopRunnable?.let { handler?.removeCallbacks(it) }
-        captureLoopRunnable = null
-        cancelPendingTranslation()
-    }
-
-    private fun checkScreenChange() {
-        if (!isRunning.get() || isManualTranslating.get()) return
-
-        try {
-            // 锁内仅获取 Bitmap 引用，锁外计算哈希，
-            // 避免持锁期间遍历全屏像素阻塞 imageAvailableListener 更新缓存
-            val cached = synchronized(cachedBitmapLock) {
-                cachedBitmap ?: return
-            }
-            // 锁外计算哈希；若期间监听器回收了该帧（race condition），捕获异常并跳过本轮
-            val currentHash = try {
-                computePixelHash(cached)
-            } catch (e: IllegalStateException) {
-                AppLog.w("ScreenCapture", "checkScreenChange: 帧已被回收，跳过本轮: ${e.message}")
-                return
-            }
-
-            // 翻译覆盖层显示期间，仅更新基线哈希，不检测变化
-            // 防止覆盖层出现/消失被误判为画面变化导致气泡被清除
-            if (suppressChangeDetection) {
-                lastFrameHash = currentHash
-                // 关键修复：suppress 期间画面含气泡，此时 currentHash 是"含气泡稳定画面"的哈希。
-                // 同步到 lastTranslatedHash，防止 suppress 结束后 checkScreenChange 误判
-                // "含气泡画面(currentHash)" != "无气泡截图哈希(旧lastTranslatedHash)" 而触发重复翻译。
-                // 旧实现记录的是截图时(无气泡)的哈希，与 suppress 结束后的含气泡画面永远不等，
-                // 导致每轮冷却期(AUTO_COOLDOWN_MS=2s)结束后必定触发新翻译，气泡反复清除+重画。
-                lastTranslatedHash = currentHash
-                return
-            }
-
-            if (lastFrameHash == 0L) {
-                lastFrameHash = currentHash
-                stableFrameCount = 1
-                return
-            }
-            val changed = isFrameChanged(lastFrameHash, currentHash)
-
-            if (changed) {
-                isScreenStable = false
-                stableFrameCount = 0
-                movingFrameCount++
-                if (movingFrameCount >= REQUIRED_MOVING_FRAMES) {
-                    screenChangeVersion.incrementAndGet()
-                    cancelPendingTranslation()
-                    FloatingWindowService.clearAllTranslations()
-                }
-            } else {
-                movingFrameCount = 0
-                stableFrameCount++
-                if (!isScreenStable && stableFrameCount >= REQUIRED_STABLE_FRAMES) {
-                    isScreenStable = true
-                }
-                val inCooldown = System.currentTimeMillis() - lastTranslationTimeMs < AUTO_COOLDOWN_MS
-                if (isScreenStable && currentHash != lastTranslatedHash && stableRunnable == null && !isProcessing.get() && !inCooldown) {
-                    scheduleStableCapture(screenChangeVersion.get(), currentHash)
-                }
-            }
-
-            lastFrameHash = currentHash
-        } catch (e: Exception) {
-            AppLog.w("ScreenCapture", "checkScreenChange: ${e.message}")
-        }
-    }
-
-    /**
-     * 批量读取像素（性能优化：比逐个getPixel快10倍+）
-     */
-    private fun computePixelHash(bitmap: Bitmap): Long {
-        var hash = 0L
-        val step = HASH_SAMPLE_STEP
-        val w = bitmap.width
-        val h = bitmap.height
-        val rowPixels = IntArray(w)
-        for (y in 0 until h step step) {
-            bitmap.getPixels(rowPixels, 0, w, 0, y, w, 1)
-            for (x in 0 until w step step) {
-                hash = hash * 31 + (rowPixels[x] and 0xFF)
-            }
-        }
-        return hash
-    }
-
-    private fun isFrameChanged(oldHash: Long, newHash: Long): Boolean {
-        return oldHash != newHash
-    }
-
-    private fun scheduleStableCapture(expectedVersion: Long = screenChangeVersion.get(), expectedHash: Long = 0L) {
-        cancelPendingTranslation()
-        stableRunnable = Runnable {
-            stableRunnable = null
-            if (isRunning.get() && !FloatingWindowService.isPaused && !isManualTranslating.get() && screenChangeVersion.get() == expectedVersion) {
-                captureAndProcess(expectedVersion, expectedHash)
-            }
-        }
-        handler?.postDelayed(stableRunnable!!, STABLE_DELAY_MS)
-    }
-
-    private fun cancelPendingTranslation() {
-        stableRunnable?.let { handler?.removeCallbacks(it) }
-        stableRunnable = null
-    }
-
-    // ==================== 自动截图处理 ====================
-
-    private fun captureAndProcess(expectedVersion: Long, expectedHash: Long) {
-        if (!isRunning.get() || FloatingWindowService.isPaused || isManualTranslating.get()) return
-        // 用户正在触摸悬浮球时跳过本次截图，避免 hideFloatingUI 隐藏悬浮球导致
-        // ACTION_CANCEL 中断触摸序列，长按菜单无法触发
-        if (FloatingWindowService.isTouching) return
-        if (System.currentTimeMillis() - lastTranslationTimeMs < AUTO_COOLDOWN_MS) return
-        if (!isProcessing.compareAndSet(false, true)) return
-        FloatingWindowService.hideFloatingUI()
-
-        safeSubmit {
-            var capturedBitmap: Bitmap? = null
-            var bitmapConsumed = false // 标记 bitmap 是否已被 doOcrAndTranslate 内部 recycle
-            try {
-                if (screenChangeVersion.get() != expectedVersion) return@safeSubmit
-                Thread.sleep(OVERLAY_CLEAR_DELAY_MS)
-                if (screenChangeVersion.get() != expectedVersion) return@safeSubmit
-                // 从帧缓存获取截图
-                capturedBitmap = waitForFreshFrame(timeoutMs = 500L, requireFresh = false)
-                val bitmap = capturedBitmap ?: return@safeSubmit
-                val currentHash = computePixelHash(bitmap)
-                if (expectedHash != 0L && currentHash != expectedHash) {
-                    screenChangeVersion.incrementAndGet()
-                    isScreenStable = false
-                    stableFrameCount = 0
-                    bitmap.recycle()
-                    bitmapConsumed = true
-                    return@safeSubmit
-                }
-                // doOcrAndTranslate 内部负责 recycle bitmap
-                val shown = doOcrAndTranslate(bitmap, expectedVersion)
-                bitmapConsumed = true // doOcrAndTranslate 正常/异常路径都会 recycle
-                if (shown) {
-                    lastTranslatedHash = currentHash
-                    lastTranslationTimeMs = System.currentTimeMillis()
-                }
-            } catch (e: Exception) {
-                AppLog.e("ScreenCapture", "截图失败: ${e.message}")
-                // 异常路径兜底：若 bitmap 尚未被消费，必须 recycle 避免泄漏
-                if (!bitmapConsumed) {
-                    capturedBitmap?.let {
-                        try {
-                            it.recycle()
-                        } catch (_: Exception) {
-                        }
-                    }
-                }
-            } finally {
-                isProcessing.set(false)
-                restoreFloatingUiAfterCapture()
-            }
-        }
-    }
-
     private fun imageToBitmap(image: Image): Bitmap? {
         return try {
+            // 校验 Image 尺寸与预期屏幕尺寸是否一致，不一致时使用 Image 实际尺寸
+            // 计算 rowPadding 与 Bitmap，避免 VirtualDisplay 尺寸变化导致像素错位
+            val imageWidth = image.width
+            val imageHeight = image.height
+            if (imageWidth != screenWidth || imageHeight != screenHeight) {
+                AppLog.w("ScreenCapture", "Image 尺寸不匹配: ${imageWidth}x$imageHeight vs 预期 ${screenWidth}x$screenHeight")
+            }
+
             val planes = image.planes
             val buffer = planes[0].buffer
             val pixelStride = planes[0].pixelStride
             val rowStride = planes[0].rowStride
-            val rowPadding = rowStride - pixelStride * screenWidth
+            // rowPadding 必须用 Image 实际宽度计算，否则尺寸不匹配时会出现负数或像素错位
+            val rowPadding = rowStride - pixelStride * imageWidth
 
             val bitmap = Bitmap.createBitmap(
-                screenWidth + rowPadding / pixelStride,
-                screenHeight,
+                imageWidth + rowPadding / pixelStride,
+                imageHeight,
                 Bitmap.Config.ARGB_8888,
             )
             // copyPixelsFromBuffer 或后续 createBitmap 可能抛 OOM 等异常，
@@ -809,7 +536,7 @@ class ScreenCaptureService : Service() {
                 bitmap
             } else {
                 try {
-                    val cropped = Bitmap.createBitmap(bitmap, 0, 0, screenWidth, screenHeight)
+                    val cropped = Bitmap.createBitmap(bitmap, 0, 0, imageWidth, imageHeight)
                     bitmap.recycle()
                     cropped
                 } catch (e: Throwable) {
@@ -826,11 +553,7 @@ class ScreenCaptureService : Service() {
     /**
      * OCR + 翻译（统一处理，确保状态正确重置）
      */
-    private fun doOcrAndTranslate(
-        bitmap: Bitmap,
-        expectedVersion: Long = screenChangeVersion.get(),
-        allowManualResult: Boolean = false,
-    ): Boolean {
+    private fun doOcrAndTranslate(bitmap: Bitmap): Boolean {
         try {
             // pluginManager 可能在异步 cleanupResources 中被置 null，
             // 此分支必须 recycle bitmap，否则调用方依赖此函数回收会导致泄漏
@@ -844,22 +567,16 @@ class ScreenCaptureService : Service() {
             }
 
             AppLog.d("ScreenCapture", "开始OCR+翻译处理")
-            if (allowManualResult) FloatingWindowService.setStatusText("识")
+            FloatingWindowService.setStatusText("识")
 
             val direction = FloatingWindowService.recognitionDirection
-            val filterRects = if (allowManualResult) emptyList() else lastTranslationRects
             val translationCards = plugin.translateImage(
                 bitmap,
-                filterRects,
+                emptyList(),
                 direction == FloatingWindowService.Companion.RecognitionDirection.VERTICAL,
-                isManual = allowManualResult,
+                isManual = true,
             )
             bitmap.recycle()
-
-            if ((!allowManualResult && screenChangeVersion.get() != expectedVersion) || (!allowManualResult && FloatingWindowService.isPaused) || (!allowManualResult && isManualTranslating.get())) {
-                AppLog.d("ScreenCapture", "画面已变化，丢弃过期翻译结果")
-                return false
-            }
 
             if (translationCards.isEmpty()) {
                 AppLog.d("ScreenCapture", "未识别到文本或翻译结果为空")
@@ -892,20 +609,7 @@ class ScreenCaptureService : Service() {
             }
 
             if (results.isNotEmpty()) {
-                // 抑制变化检测：覆盖层即将出现，防止被误判为画面变化导致气泡被清除
-                // 用 token 机制防止连续翻译时第一次的重置提前结束第二次的抑制期
-                suppressChangeDetection = true
-                val currentToken = suppressToken.incrementAndGet()
-                handler?.postDelayed({
-                    // 仅当 token 匹配时才重置，避免被后续翻译的重置任务误触发
-                    if (suppressToken.compareAndSet(currentToken, currentToken)) {
-                        suppressChangeDetection = false
-                    }
-                }, 800L)
-
                 FloatingWindowService.showTranslationsWithDebug(this, results, debugData)
-                lastTranslationRects.clear()
-                lastTranslationRects.addAll(results.map { it.sourceRect })
                 AppLog.d("ScreenCapture", "显示 ${results.size} 个翻译结果")
                 return true
             } else {
@@ -922,7 +626,7 @@ class ScreenCaptureService : Service() {
     /**
      * 手动翻译专用处理（在当前线程执行，确保状态正确）
      */
-    private fun processImage(bitmap: Bitmap, isManual: Boolean) {
+    private fun processImage(bitmap: Bitmap) {
         // executor 可能已在 onDestroy 中被 shutdown，
         // 此时 safeSubmit 会静默 return，导致 bitmap 泄漏。
         // 提前检查，若 executor 已关闭则直接 recycle。
@@ -941,10 +645,9 @@ class ScreenCaptureService : Service() {
             val tracker = PerfTracker.start("翻译", "一次翻译流程")
             try {
                 handler?.post { FloatingWindowService.setStatusText("识别中") }
-                val shown = doOcrAndTranslate(bitmap, allowManualResult = isManual)
+                val shown = doOcrAndTranslate(bitmap)
                 tracker.end("OCR+翻译+渲染")
                 if (shown) {
-                    lastTranslationTimeMs = System.currentTimeMillis()
                     completionStatusScheduled = true
                     handler?.postDelayed({
                         FloatingWindowService.showFloatingUI()
@@ -989,9 +692,7 @@ class ScreenCaptureService : Service() {
     override fun onDestroy() {
         AppLog.d("ScreenCapture", "服务销毁")
         isRunning.set(false)
-        isRealtimeEnabled.set(false)
         isManualTranslating.set(false)
-        stopContinuousCapture()
 
         // 取消所有子协程，避免 Service 销毁后协程仍在运行
         serviceScope.cancel()
@@ -1003,10 +704,7 @@ class ScreenCaptureService : Service() {
             cleanupResources()
         }
 
-        FloatingWindowService.onModeChanged = null
         FloatingWindowService.onManualTranslate = null
-        FloatingWindowService.onPauseChanged = null
-        FloatingWindowService.onTouchStateChanged = null
         FloatingWindowService.onRecognitionDirectionChanged = null
 
         super.onDestroy()
@@ -1067,7 +765,6 @@ class ScreenCaptureService : Service() {
             cachedBitmap?.recycle()
             cachedBitmap = null
         }
-        lastFrameHash = 0L
 
         // 7-8. 释放 native 资源（必须在 executor 任务全部完成后）
         pluginManager?.close()

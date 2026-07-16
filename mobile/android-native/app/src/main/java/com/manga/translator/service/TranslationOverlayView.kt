@@ -326,11 +326,19 @@ class TranslationOverlayView(context: Context) : View(context) {
         val paddingX = 5f * density
         val paddingY = 4f * density
 
-        val availableWidth = (bubbleRect.width() - paddingX * 2).toInt()
-        val availableHeight = (bubbleRect.height() - paddingY * 2).toInt()
-        if (availableWidth < 20 || availableHeight < 30) return null
+        var availableWidth = (bubbleRect.width() - paddingX * 2).toInt()
+        var availableHeight = (bubbleRect.height() - paddingY * 2).toInt()
 
-        val textSize = calculateVerticalFontSize(text, availableWidth, availableHeight)
+        // 空间极小时给一个最小可用空间，保证竖向输出可见，避免静默丢失翻译内容
+        if (availableWidth < 10) availableWidth = 10
+        if (availableHeight < 10) availableHeight = 10
+
+        // 从正常字号开始，逐步减小直到能放下至少一列一字；calculateVerticalFontSize 极端情况下
+        // 可能返回偏小值，这里用 coerceAtLeast 做下限保护，确保字号始终可用
+        var textSize = calculateVerticalFontSize(text, availableWidth, availableHeight).coerceAtLeast(MIN_TEXT_SP * scaledDensity())
+        val minTextSize = MIN_TEXT_SP * scaledDensity() // 最小字号 6.5sp
+        if (textSize < minTextSize) textSize = minTextSize
+
         val lineHeight = textSize * VERTICAL_LINE_HEIGHT
         val maxCharsPerCol = max(1, (availableHeight / lineHeight).toInt())
         val maxColumns = max(1, (availableWidth / (textSize * VERTICAL_COLUMN_WIDTH)).toInt())
@@ -589,8 +597,11 @@ class TranslationOverlayView(context: Context) : View(context) {
     }
 
     private fun constrainDisplayRect(rect: RectF, isVertical: Boolean): RectF {
-        val maxWidth = width * if (isVertical) 0.18f else 0.34f
-        val maxHeight = height * if (isVertical) 0.22f else 0.16f
+        // 适当放宽限宽限高，让翻译气泡能更好地覆盖原文气泡区域：
+        // 竖向：宽度 0.18→0.22，高度 0.22→0.30（日漫竖向气泡通常较高较窄）
+        // 横向：宽度 0.34→0.40，高度 0.16→0.20
+        val maxWidth = width * if (isVertical) 0.22f else 0.40f
+        val maxHeight = height * if (isVertical) 0.30f else 0.20f
         val newWidth = min(rect.width(), maxWidth)
         val newHeight = min(rect.height(), maxHeight)
         val cx = rect.centerX()

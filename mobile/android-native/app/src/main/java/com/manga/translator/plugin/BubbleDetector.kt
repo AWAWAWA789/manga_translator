@@ -29,9 +29,11 @@ class BubbleDetector : BubbleDetectorInterface {
         private const val MORPH_ITERATIONS = 1
 
         // 轮廓筛选参数
-        private const val MIN_BUBBLE_AREA = 200.0
+        // MIN_BUBBLE_AREA 从 200 降到 150（减小 25%），让小气泡也能被检测到
+        // MAX_BUBBLE_IMAGE_RATIO 从 0.45 提到 0.55，让大气泡也能被检测到
+        private const val MIN_BUBBLE_AREA = 150.0
         private const val MAX_BUBBLE_AREA = 500000.0
-        private const val MAX_BUBBLE_IMAGE_RATIO = 0.45
+        private const val MAX_BUBBLE_IMAGE_RATIO = 0.55
         private const val MIN_ASPECT_RATIO = 0.15
         private const val MAX_ASPECT_RATIO = 6.0
         private const val MIN_SOLIDITY = 0.3
