@@ -37,6 +37,7 @@ class FloatingWindowService : Service() {
 
         var onManualTranslate: (() -> Unit)? = null
         var onRecognitionDirectionChanged: ((RecognitionDirection) -> Unit)? = null
+        var onAiVisionModeChanged: ((Boolean) -> Unit)? = null
 
         /** 安全调用回调，防止目标服务已销毁导致崩溃 */
         private inline fun safeCallback(noinline callback: (() -> Unit)?) {
@@ -170,6 +171,8 @@ class FloatingWindowService : Service() {
         useAiVisionMode = enabled
         getSharedPreferences("translation_config", Context.MODE_PRIVATE)
             .edit().putBoolean("ai_bubble_detection", enabled).apply()
+        // 通知 ScreenCaptureService 同步 pluginManager 状态，避免菜单切换后翻译仍用旧模式
+        safeCallbackArg(onAiVisionModeChanged, enabled)
     }
 
     // ==================== 主悬浮球 ====================

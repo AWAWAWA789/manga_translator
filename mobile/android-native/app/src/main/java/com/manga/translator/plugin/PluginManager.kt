@@ -65,7 +65,7 @@ class PluginManager(private val context: Context) : TranslationRepository {
 
     @Volatile private var useAiVisionMode = false
 
-    override fun initialize() {
+    override fun initialize() = synchronized(translateLock) {
         if (isInitialized) return
 
         ocrPlugin.initialize()
@@ -543,7 +543,7 @@ class PluginManager(private val context: Context) : TranslationRepository {
         return false
     }
 
-    override fun close() {
+    override fun close() = synchronized(translateLock) {
         // 未初始化则无需关闭，避免重复释放
         if (!isInitialized) return
         // 依次关闭各子插件，确保翻译/AI/OCR 资源均被释放
@@ -562,7 +562,9 @@ class PluginManager(private val context: Context) : TranslationRepository {
      *
      * 过渡期：translate 内部调用 translateImage 并读取更新后的 lastDebugData 作为返回。
      */
-    override fun translate(params: TranslationRepository.TranslateParams): TranslationRepository.TranslateResult {
+    override fun translate(
+        params: TranslationRepository.TranslateParams,
+    ): TranslationRepository.TranslateResult = synchronized(translateLock) {
         // 同步实例状态到 params 指定值，保证 translateImage 使用最新配置
         cropConfig = params.cropConfig
         useAiVisionMode = params.useAiVisionMode
@@ -573,7 +575,7 @@ class PluginManager(private val context: Context) : TranslationRepository {
             verticalOnly = params.verticalOnly,
             isManual = params.isManual,
         )
-        return TranslationRepository.TranslateResult(
+        TranslationRepository.TranslateResult(
             cards = cards,
             debugData = lastDebugData,
         )

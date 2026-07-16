@@ -227,6 +227,11 @@ class ScreenCaptureService : Service() {
             AppLog.d("ScreenCapture", "识别方向变更: $direction")
             FloatingWindowService.clearAllTranslations()
         }
+
+        FloatingWindowService.onAiVisionModeChanged = { enabled ->
+            AppLog.d("ScreenCapture", "AI多模态识别变更: ${if (enabled) "启用" else "禁用"}")
+            pluginManager?.setUseAiVisionMode(enabled)
+        }
     }
 
     private fun getScreenMetrics() {

@@ -32,11 +32,12 @@ class OcrProcessor(private val context: Context) {
         // Read the full screen. App UI and stale overlays are filtered elsewhere.
         private const val CROP_TOP_RATIO = 0.0f
         private const val CROP_BOTTOM_RATIO = 1.0f
+    }
 
-        // OCR 专用线程池：保持 6 线程并行能力，提交 4 遍任务（enhanced/binary × 0°/90°）
-        private val ocrExecutor = java.util.concurrent.Executors.newFixedThreadPool(6) { r ->
-            Thread(r, "OcrWorker").apply { isDaemon = true }
-        }
+    // OCR 专用线程池：保持 6 线程并行能力，提交 4 遍任务（enhanced/binary × 0°/90°）
+    // 实例字段：close() 时可 shutdown，避免静态线程池常驻泄漏
+    private val ocrExecutor = java.util.concurrent.Executors.newFixedThreadPool(6) { r ->
+        Thread(r, "OcrWorker").apply { isDaemon = true }
     }
 
     private val textRecognizer: TextRecognizer = TextRecognition.getClient(
@@ -522,6 +523,15 @@ class OcrProcessor(private val context: Context) {
             textRecognizer.close()
         } catch (e: Exception) {
             AppLog.w("OcrProcessor", "TextRecognizer close 异常: ${e.message}")
+        }
+        try {
+            ocrExecutor.shutdown()
+            if (!ocrExecutor.awaitTermination(2, TimeUnit.SECONDS)) {
+                ocrExecutor.shutdownNow()
+            }
+        } catch (e: InterruptedException) {
+            Thread.currentThread().interrupt()
+            AppLog.w("OcrProcessor", "ocrExecutor 关闭被中断: ${e.message}")
         }
     }
 }
