@@ -446,7 +446,7 @@ class OcrProcessor(private val context: Context) {
                 mapRectBack(it, rectBitmapWidth, rectBitmapHeight, origWidth, origHeight, degrees)
             }
             results.add(OcrResult(mergedText, originalBox, avgConfidence, isVerticalBlock))
-            AppLog.d("OcrProcessor", "识别: $mergedText (置信度: $avgConfidence, 竖向: $isVerticalBlock)")
+            AppLog.d("OcrProcessor") { "识别: $mergedText (置信度: $avgConfidence, 竖向: $isVerticalBlock)" }
         }
         return results
     }

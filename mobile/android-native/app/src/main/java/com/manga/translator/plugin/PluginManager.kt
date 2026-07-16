@@ -98,12 +98,12 @@ class PluginManager(private val context: Context) : TranslationRepository {
         val isManual = params.isManual
 
         val tracker = PerfTracker.start("PluginManager", "翻译图片")
-        AppLog.d("PluginManager", "开始翻译图片: ${bitmap.width}x${bitmap.height}")
+        AppLog.d("PluginManager") { "开始翻译图片: ${bitmap.width}x${bitmap.height}" }
         AppLog.d("PluginManager", "=== PluginManager v3 已加载 ===")
 
         val cropRect = ComicImageCropper.getCropRect(bitmap.width, bitmap.height, cropConfig)
         val croppedBitmap = ComicImageCropper.cropComicArea(bitmap, cropConfig)
-        AppLog.d("PluginManager", "裁剪后: ${croppedBitmap.width}x${croppedBitmap.height}")
+        AppLog.d("PluginManager") { "裁剪后: ${croppedBitmap.width}x${croppedBitmap.height}" }
 
         try {
             // AI 多模态路径：手动翻译 + AI开启 + MiMo已配置
@@ -118,7 +118,7 @@ class PluginManager(private val context: Context) : TranslationRepository {
                     } else {
                         val rawCards = aiVisionPipeline.toTranslationCards(aiResult, lastTranslationRects)
                         val cards = rawCards.map { card -> card.withOffset(cropRect.left, cropRect.top) }
-                        AppLog.d("PluginManager", "AI多模态: ${cards.size} 个翻译结果")
+                        AppLog.d("PluginManager") { "AI多模态: ${cards.size} 个翻译结果" }
                         // 用本次 AI 结果构建调试覆盖数据（裁剪坐标系，再统一应用偏移）
                         val debugData = DebugOverlayData(
                             bubbles = emptyList(),
@@ -141,7 +141,7 @@ class PluginManager(private val context: Context) : TranslationRepository {
                 emptyList()
             }
             PerfTracker.record("PluginManager", "PanelDetect", System.currentTimeMillis() - panelStart)
-            AppLog.d("PluginManager", "分镜检测: ${panels.size} 个分镜")
+            AppLog.d("PluginManager") { "分镜检测: ${panels.size} 个分镜" }
 
             val bubbleStart = System.currentTimeMillis()
             val bubbles = if (OpenCVHelper.isInitialized()) {
@@ -150,18 +150,18 @@ class PluginManager(private val context: Context) : TranslationRepository {
                 emptyList()
             }
             PerfTracker.record("PluginManager", "BubbleDetect", System.currentTimeMillis() - bubbleStart)
-            AppLog.d("PluginManager", "气泡检测: ${bubbles.size} 个气泡")
+            AppLog.d("PluginManager") { "气泡检测: ${bubbles.size} 个气泡" }
 
             val ocrBlocks = ocrPlugin.recognize(croppedBitmap, verticalOnly)
             tracker.end("OCR识别")
-            AppLog.d("PluginManager", "OCR识别: ${ocrBlocks.size} 个块")
+            AppLog.d("PluginManager") { "OCR识别: ${ocrBlocks.size} 个块" }
 
             val textFilteredBlocks = ocrBlocks.filter { TextFilter.isValidOcrText(it.text) }
-            AppLog.d("PluginManager", "文本过滤后: ${textFilteredBlocks.size} 个块")
+            AppLog.d("PluginManager") { "文本过滤后: ${textFilteredBlocks.size} 个块" }
 
             val filteredBlocks = textFilteredBlocks
                 .filter { block -> !overlapsAnyTranslationRect(block.rect, lastTranslationRects, cropRect) }
-            AppLog.d("PluginManager", "覆盖层过滤后: ${filteredBlocks.size} 个块")
+            AppLog.d("PluginManager") { "覆盖层过滤后: ${filteredBlocks.size} 个块" }
 
             val translatedCropResult = translateCore(
                 panels = panels,
@@ -218,10 +218,9 @@ class PluginManager(private val context: Context) : TranslationRepository {
         )
 
         val limitedRegions = limitRegions(regions)
-        AppLog.d(
-            "PluginManager",
-            "=== 句子优先: 输入${ocrBlocks.size}块, 句子${sentenceRegions.size}个, 去重${regions.size}, 最终${limitedRegions.size}区域 ===",
-        )
+        AppLog.d("PluginManager") {
+            "=== 句子优先: 输入${ocrBlocks.size}块, 句子${sentenceRegions.size}个, 去重${regions.size}, 最终${limitedRegions.size}区域 ==="
+        }
 
         val translatedTexts = translationPlugin.translateBatch(limitedRegions.map { it.text })
         val cards = limitedRegions.mapIndexed { index, region ->
@@ -243,7 +242,7 @@ class PluginManager(private val context: Context) : TranslationRepository {
     ): List<TextRegion> {
         val blocks = dedupeBlocksInBubble(ocrBlocks)
         val sentenceGroups = sentenceAssembler.assemble(blocks)
-        AppLog.d("PluginManager", "句子优先组装: ${ocrBlocks.size}块→去重${blocks.size}块→${sentenceGroups.size}句")
+        AppLog.d("PluginManager") { "句子优先组装: ${ocrBlocks.size}块→去重${blocks.size}块→${sentenceGroups.size}句" }
 
         return sentenceGroups.mapNotNull { sentenceBlocks ->
             val textRect = unionRects(sentenceBlocks.map { it.rect })
@@ -258,13 +257,13 @@ class PluginManager(private val context: Context) : TranslationRepository {
     }
 
     private fun logSentenceDebug(blocks: List<OcrBlock>, region: TextRegion) {
-        val blockSummary = blocks.joinToString(" | ") { block ->
-            "${block.text.trim()}@[${block.rect.left},${block.rect.top},${block.rect.right},${block.rect.bottom}]"
+        // blockSummary 的 joinToString 移入 lambda，Release 包完全不执行循环拼接
+        AppLog.d("PluginManager") {
+            val blockSummary = blocks.joinToString(" | ") { block ->
+                "${block.text.trim()}@[${block.rect.left},${block.rect.top},${block.rect.right},${block.rect.bottom}]"
+            }
+            "句子调试: text='${region.text}' anchor=[${region.outputRect.centerX()},${region.outputRect.centerY()}] textRect=${region.textRect.toShortString()} out=${region.outputRect.toShortString()} blocks=$blockSummary"
         }
-        AppLog.d(
-            "PluginManager",
-            "句子调试: text='${region.text}' anchor=[${region.outputRect.centerX()},${region.outputRect.centerY()}] textRect=${region.textRect.toShortString()} out=${region.outputRect.toShortString()} blocks=$blockSummary",
-        )
     }
 
     private fun textBoundsWithMargin(textRect: Rect, imageWidth: Int, imageHeight: Int): Rect {
@@ -339,10 +338,9 @@ class PluginManager(private val context: Context) : TranslationRepository {
             val dy = abs(block.rect.centerY() - textRect.centerY()).toFloat()
             dx + dy - block.confidence * 40f
         } ?: blocks.first()
-        AppLog.d(
-            "PluginManager",
-            "锚点选择: textRect=${textRect.toShortString()} anchor='${anchor.text.trim()}' rect=${anchor.rect.toShortString()} conf=${anchor.confidence}",
-        )
+        AppLog.d("PluginManager") {
+            "锚点选择: textRect=${textRect.toShortString()} anchor='${anchor.text.trim()}' rect=${anchor.rect.toShortString()} conf=${anchor.confidence}"
+        }
         return anchor
     }
 

@@ -12,6 +12,14 @@ object AppLog {
     fun d(module: String, message: String) {
         if (BuildConfig.DEBUG) Log.d(module, message)
     }
+
+    /**
+     * 惰性求值版本：仅 DEBUG 构建时计算 [msg]，Release 完全跳过字符串拼接。
+     * 用于热路径含 ${} 模板的日志；inline 让 R8 在 Release 消除整个调用。
+     */
+    inline fun d(module: String, crossinline msg: () -> String) {
+        if (BuildConfig.DEBUG) Log.d(module, msg())
+    }
     fun i(module: String, message: String) {
         Log.i(module, message)
     }

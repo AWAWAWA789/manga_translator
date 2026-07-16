@@ -23,6 +23,7 @@ class TranslationOverlayView(context: Context) : View(context) {
         private const val MIN_TEXT_SP = 6.5f
         private const val VERTICAL_LINE_HEIGHT = 1.12f
         private const val VERTICAL_COLUMN_WIDTH = 1.15f
+        private val MULTI_SPACE_REGEX = Regex("\\s{2,}")
     }
 
     data class TranslationItem(
@@ -42,6 +43,10 @@ class TranslationOverlayView(context: Context) : View(context) {
     )
 
     private val density = resources.displayMetrics.density
+    private val scaledDensity = resources.displayMetrics.scaledDensity
+
+    /** onDraw 复用 RectF，避免每帧分配（单线程主线程，安全复用） */
+    private val scratchRectF = RectF()
     private val textPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.rgb(20, 20, 20)
     }
@@ -192,9 +197,9 @@ class TranslationOverlayView(context: Context) : View(context) {
     }
 
     private fun drawMask(canvas: Canvas, placed: PlacedItem) {
-        val maskRect = RectF(placed.box)
         val radius = 8f * density
-        canvas.drawRoundRect(maskRect, radius, radius, maskPaint)
+        scratchRectF.set(placed.box)
+        canvas.drawRoundRect(scratchRectF, radius, radius, maskPaint)
     }
 
     private fun drawDebugBubbles(canvas: Canvas) {
@@ -335,8 +340,8 @@ class TranslationOverlayView(context: Context) : View(context) {
 
         // 从正常字号开始，逐步减小直到能放下至少一列一字；calculateVerticalFontSize 极端情况下
         // 可能返回偏小值，这里用 coerceAtLeast 做下限保护，确保字号始终可用
-        var textSize = calculateVerticalFontSize(text, availableWidth, availableHeight).coerceAtLeast(MIN_TEXT_SP * scaledDensity())
-        val minTextSize = MIN_TEXT_SP * scaledDensity() // 最小字号 6.5sp
+        var textSize = calculateVerticalFontSize(text, availableWidth, availableHeight).coerceAtLeast(MIN_TEXT_SP * scaledDensity)
+        val minTextSize = MIN_TEXT_SP * scaledDensity // 最小字号 6.5sp
         if (textSize < minTextSize) textSize = minTextSize
 
         val lineHeight = textSize * VERTICAL_LINE_HEIGHT
@@ -401,8 +406,8 @@ class TranslationOverlayView(context: Context) : View(context) {
     }
 
     private fun calculateFontSize(text: String, maxWidth: Int, maxHeight: Int): Float {
-        val maxSize = MAX_HORIZONTAL_TEXT_SP * scaledDensity()
-        val minSize = MIN_TEXT_SP * scaledDensity()
+        val maxSize = MAX_HORIZONTAL_TEXT_SP * scaledDensity
+        val minSize = MIN_TEXT_SP * scaledDensity
 
         // 缓存命中：先用上次的字号尝试一次，避免重新二分
         val cacheKey = "$text|$maxWidth|$maxHeight"
@@ -428,9 +433,9 @@ class TranslationOverlayView(context: Context) : View(context) {
             val totalHeight = layout.height + 12f * density
             if (totalHeight <= maxHeight) {
                 best = mid
-                lo = mid + 0.5f * scaledDensity()
+                lo = mid + 0.5f * scaledDensity
             } else {
-                hi = mid - 0.5f * scaledDensity()
+                hi = mid - 0.5f * scaledDensity
             }
         }
         textSizeCache[cacheKey] = best
@@ -438,8 +443,8 @@ class TranslationOverlayView(context: Context) : View(context) {
     }
 
     private fun calculateVerticalFontSize(text: String, maxWidth: Int, maxHeight: Int): Float {
-        val maxSize = MAX_VERTICAL_TEXT_SP * scaledDensity()
-        val minSize = MIN_TEXT_SP * scaledDensity()
+        val maxSize = MAX_VERTICAL_TEXT_SP * scaledDensity
+        val minSize = MIN_TEXT_SP * scaledDensity
         // 二分查找：找到最大的能放下的字号
         var lo = minSize
         var hi = maxSize
@@ -452,9 +457,9 @@ class TranslationOverlayView(context: Context) : View(context) {
             val maxColumns = max(1, (maxWidth / (mid * VERTICAL_COLUMN_WIDTH)).toInt())
             if (requiredColumns <= maxColumns) {
                 best = mid
-                lo = mid + 0.5f * scaledDensity()
+                lo = mid + 0.5f * scaledDensity
             } else {
-                hi = mid - 0.5f * scaledDensity()
+                hi = mid - 0.5f * scaledDensity
             }
         }
         return best
@@ -488,14 +493,15 @@ class TranslationOverlayView(context: Context) : View(context) {
     private fun drawCard(canvas: Canvas, placed: PlacedItem) {
         val radius = 8f * density
         // 阴影
-        val shadowBox = RectF(placed.box).apply { offset(0f, 1.5f * density) }
-        canvas.drawRoundRect(shadowBox, radius, radius, shadowPaint)
+        scratchRectF.set(placed.box)
+        scratchRectF.offset(0f, 1.5f * density)
+        canvas.drawRoundRect(scratchRectF, radius, radius, shadowPaint)
         // 背景
         canvas.drawRoundRect(placed.box, radius, radius, bgPaint)
         // 左侧彩色竖条
         val accentW = 3f * density
-        val accentRect = RectF(placed.box.left, placed.box.top + radius, placed.box.left + accentW, placed.box.bottom - radius)
-        canvas.drawRect(accentRect, accentPaint)
+        scratchRectF.set(placed.box.left, placed.box.top + radius, placed.box.left + accentW, placed.box.bottom - radius)
+        canvas.drawRect(scratchRectF, accentPaint)
         // 边框
         canvas.drawRoundRect(placed.box, radius, radius, strokePaint)
 
@@ -556,7 +562,7 @@ class TranslationOverlayView(context: Context) : View(context) {
         return text.trim()
             // 仅合并连续多空格为单空格，保留英文与中文之间的分隔
             // 避免把 "OK 好的" 压成 "OK好的" 导致英文混排粘连
-            .replace(Regex("\\s{2,}"), " ")
+            .replace(MULTI_SPACE_REGEX, " ")
             .replace("......", "……")
             .replace("...", "…")
     }
@@ -609,6 +615,4 @@ class TranslationOverlayView(context: Context) : View(context) {
         val cy = rect.centerY()
         return RectF(cx - newWidth / 2f, cy - newHeight / 2f, cx + newWidth / 2f, cy + newHeight / 2f)
     }
-
-    private fun scaledDensity(): Float = resources.displayMetrics.scaledDensity
 }

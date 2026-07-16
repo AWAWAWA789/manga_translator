@@ -9,6 +9,7 @@ import com.google.gson.Gson
 import com.google.gson.annotations.SerializedName
 import com.manga.translator.model.TranslationCard
 import com.manga.translator.translation.MimoTranslator
+import com.manga.translator.util.AppLog
 import com.manga.translator.util.HttpClientProvider
 import com.manga.translator.util.PerfTracker
 import com.manga.translator.util.TextFilter
@@ -334,7 +335,7 @@ class AiVisionPipeline(private val context: Context) {
         } catch (e: Exception) {
             // 不再吞掉异常静默返回空列表，改为通过 error 字段把错误信息透出给调用方决定回退还是报错
             Log.e(TAG, "解析AI响应失败: ${e.message}")
-            Log.d(TAG, "原始响应: $response")
+            AppLog.d(TAG) { "原始响应: ${response.take(500)}" }
             AiAnalysisResult(emptyList(), response, error = "解析AI响应失败: ${e.message}")
         }
     }
