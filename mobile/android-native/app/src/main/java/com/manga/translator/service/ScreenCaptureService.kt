@@ -211,6 +211,10 @@ class ScreenCaptureService : Service() {
         try {
             startForeground(NOTIFICATION_ID, createNotification())
         } catch (e: Exception) {
+            // startForeground 失败常见原因：通知渠道创建失败、Android 14+ 类型限制。
+            // 必须记录日志并 Toast 提示用户，否则 MainActivity UI 仍显示"运行中"但 Service 已停止
+            AppLog.e("ScreenCapture", "startForeground 失败: ${e.message}", e)
+            android.widget.Toast.makeText(this, "翻译服务启动失败：${e.message}", android.widget.Toast.LENGTH_LONG).show()
             stopSelf()
             return START_NOT_STICKY
         }
@@ -443,6 +447,8 @@ class ScreenCaptureService : Service() {
         synchronized(stateLock) {
             if (!isProcessing.compareAndSet(false, true)) {
                 AppLog.w("ScreenCapture", "已有翻译任务进行中，检查是否卡住")
+                // 给用户可见反馈，避免 AI 多模态翻译耗时较长时用户反复点击以为没点到
+                FloatingWindowService.setStatusText("翻译中...")
                 // Safety: force reset if stuck for too long
                 if (System.currentTimeMillis() - processingStartTimeMs.get() > 8000) {
                     AppLog.w("ScreenCapture", "isProcessing 卡住超过8秒，强制重置")
@@ -592,9 +598,22 @@ class ScreenCaptureService : Service() {
     }
 
     /**
+     * OCR + 翻译结果分类，供 processImage 据此显示差异化状态文字
+     */
+    private enum class TranslateOutcome {
+        SUCCESS, // 有有效翻译结果已显示
+        EMPTY_OCR, // OCR 识别到 0 块，画面确实没文字
+        ALL_TRANSLATE_FAILED, // OCR 识别到文字但翻译全部失败（网络/API错误）
+        NOT_CONFIGURED, // 翻译器未配置，返回"请配置..."
+        NO_VALID_RESULT, // 翻译成功但被过滤（标点/日文残留等）
+        PLUGIN_NULL, // pluginManager 已释放
+        ERROR, // 异常
+    }
+
+    /**
      * OCR + 翻译（统一处理，确保状态正确重置）
      */
-    private fun doOcrAndTranslate(bitmap: Bitmap): Boolean {
+    private fun doOcrAndTranslate(bitmap: Bitmap): TranslateOutcome {
         try {
             // pluginManager 可能在异步 cleanupResources 中被置 null，
             // 此分支必须 recycle bitmap，否则调用方依赖此函数回收会导致泄漏
@@ -604,7 +623,7 @@ class ScreenCaptureService : Service() {
                     bitmap.recycle()
                 } catch (_: Exception) {
                 }
-                return false
+                return TranslateOutcome.PLUGIN_NULL
             }
 
             AppLog.d("ScreenCapture", "开始OCR+翻译处理")
@@ -621,12 +640,18 @@ class ScreenCaptureService : Service() {
 
             if (translationCards.isEmpty()) {
                 AppLog.d("ScreenCapture", "未识别到文本或翻译结果为空")
-                return false
+                return TranslateOutcome.EMPTY_OCR
             }
 
             AppLog.d("ScreenCapture", "翻译完成，获得 ${translationCards.size} 个结果")
 
             val debugData = plugin.getLastDebugData()
+
+            // 先按译文特征分类，区分"未配置"和"翻译失败"
+            val hasNotConfigured = translationCards.any { it.translatedText.startsWith("请配置") }
+            val hasTranslateFailed = translationCards.any {
+                it.translatedText.startsWith("翻译失败") || it.translatedText.startsWith("翻译错误")
+            }
 
             val results = translationCards.mapNotNull { card ->
                 val scaledRect = Rect(
@@ -646,21 +671,26 @@ class ScreenCaptureService : Service() {
                 translated.length >= 2 &&
                     !translated.startsWith("翻译失败") &&
                     !translated.startsWith("翻译错误") &&
+                    !translated.startsWith("请配置") &&
                     !translated.matches(Regex("^[\\p{Punct}\\s]+$"))
             }
 
             if (results.isNotEmpty()) {
                 FloatingWindowService.showTranslationsWithDebug(this, results, debugData)
                 AppLog.d("ScreenCapture", "显示 ${results.size} 个翻译结果")
-                return true
+                return TranslateOutcome.SUCCESS
             } else {
                 AppLog.d("ScreenCapture", "没有有效的翻译结果")
-                return false
+                return when {
+                    hasNotConfigured -> TranslateOutcome.NOT_CONFIGURED
+                    hasTranslateFailed -> TranslateOutcome.ALL_TRANSLATE_FAILED
+                    else -> TranslateOutcome.NO_VALID_RESULT
+                }
             }
         } catch (e: Exception) {
             AppLog.e("ScreenCapture", "处理失败: ${e.message}")
             try { bitmap.recycle() } catch (_: Exception) {}
-            return false
+            return TranslateOutcome.ERROR
         }
     }
 
@@ -682,18 +712,38 @@ class ScreenCaptureService : Service() {
             val tracker = PerfTracker.start("翻译", "一次翻译流程")
             try {
                 handler?.post { FloatingWindowService.setStatusText("识别中") }
-                val shown = doOcrAndTranslate(bitmap)
+                val outcome = doOcrAndTranslate(bitmap)
                 tracker.end("OCR+翻译+渲染")
-                if (shown) {
-                    completionStatusScheduled = true
-                    handler?.postDelayed({
-                        FloatingWindowService.showFloatingUI()
-                        FloatingWindowService.setStatusText("完成")
+                // 根据结果分类显示差异化状态文字，让用户能区分"没文字"和"翻译失败"
+                when (outcome) {
+                    TranslateOutcome.SUCCESS -> {
+                        completionStatusScheduled = true
+                        handler?.postDelayed({
+                            FloatingWindowService.showFloatingUI()
+                            FloatingWindowService.setStatusText("完成")
+                            handler?.postDelayed({ FloatingWindowService.updateMainAppearance() }, 1200L)
+                        }, 100L)
+                    }
+                    TranslateOutcome.NOT_CONFIGURED -> {
+                        handler?.post { FloatingWindowService.setStatusText("未配置") }
+                        handler?.postDelayed({ FloatingWindowService.updateMainAppearance() }, 1500L)
+                    }
+                    TranslateOutcome.ALL_TRANSLATE_FAILED -> {
+                        handler?.post { FloatingWindowService.setStatusText("翻译失败") }
+                        handler?.postDelayed({ FloatingWindowService.updateMainAppearance() }, 1500L)
+                    }
+                    TranslateOutcome.EMPTY_OCR -> {
+                        handler?.post { FloatingWindowService.setStatusText("未识别到文字") }
                         handler?.postDelayed({ FloatingWindowService.updateMainAppearance() }, 1200L)
-                    }, 100L)
-                } else {
-                    handler?.post { FloatingWindowService.setStatusText("无结果") }
-                    handler?.postDelayed({ FloatingWindowService.updateMainAppearance() }, 1200L)
+                    }
+                    TranslateOutcome.NO_VALID_RESULT -> {
+                        handler?.post { FloatingWindowService.setStatusText("无有效结果") }
+                        handler?.postDelayed({ FloatingWindowService.updateMainAppearance() }, 1200L)
+                    }
+                    TranslateOutcome.PLUGIN_NULL, TranslateOutcome.ERROR -> {
+                        handler?.post { FloatingWindowService.setStatusText("失败") }
+                        handler?.postDelayed({ FloatingWindowService.updateMainAppearance() }, 1200L)
+                    }
                 }
             } catch (e: Exception) {
                 AppLog.e("ScreenCapture", "单次翻译处理失败: ${e.message}")

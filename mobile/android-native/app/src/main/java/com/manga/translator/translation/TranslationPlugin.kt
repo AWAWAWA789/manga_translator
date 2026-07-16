@@ -63,6 +63,11 @@ class TranslationPlugin(private val context: Context) : Translator {
         preferences.edit()
             .putString(KEY_DEFAULT_TRANSLATOR, type.name)
             .apply()
+        // 切换默认翻译器后必须清空缓存，否则 translate() 会命中旧翻译器产出的缓存结果，
+        // 用户感知"切换没生效"。API key 变更走 setConfig 路径，同样需要清缓存，但
+        // BaiduTranslator/MimoTranslator.setConfig 未回调至此，依赖 Service 侧实例的
+        // 外部清缓存（Service 重启或设置页主动调用）。
+        clearCache()
     }
 
     override fun translate(text: String): String {

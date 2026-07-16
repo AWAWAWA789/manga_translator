@@ -42,7 +42,7 @@
     <ID>TooGenericExceptionThrown:BaiduTranslator.kt$BaiduTranslator$throw Exception("响应解析失败")</ID>
     <ID>TooGenericExceptionThrown:BaiduTranslator.kt$BaiduTranslator$throw Exception("百度错误: ${result.errorCode} - ${result.errorMsg}")</ID>
     <ID>TooGenericExceptionThrown:BaiduTranslator.kt$BaiduTranslator$throw Exception("翻译结果为空")</ID>
-    <ID>TooGenericExceptionThrown:MimoTranslator.kt$MimoTranslator$throw Exception("HTTP错误: ${response.code}")</ID>
+    <ID>TooGenericExceptionThrown:MimoTranslator.kt$MimoTranslator$throw Exception("HTTP错误: ${response.code} 响应: ${responseBody.take(500)}")</ID>
     <ID>TooGenericExceptionThrown:MimoTranslator.kt$MimoTranslator$throw Exception("MiMo错误: ${result.error.message}")</ID>
     <ID>TooGenericExceptionThrown:MimoTranslator.kt$MimoTranslator$throw Exception("响应为空")</ID>
     <ID>TooGenericExceptionThrown:MimoTranslator.kt$MimoTranslator$throw Exception("翻译结果为空")</ID>

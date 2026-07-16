@@ -229,7 +229,9 @@ $source"""
             val responseBody = response.body?.string() ?: throw Exception("响应为空")
 
             if (!response.isSuccessful) {
-                throw Exception("HTTP错误: ${response.code}")
+                // 429 限流 / 401 鉴权失败 / 5xx 服务器错误时，响应体含具体错误原因，
+                // 必须带入异常信息，否则用户只看到 "HTTP错误: 429" 无法诊断
+                throw Exception("HTTP错误: ${response.code} 响应: ${responseBody.take(500)}")
             }
 
             val result = gson.fromJson(responseBody, ChatResponse::class.java)

@@ -213,7 +213,13 @@ class FloatingWindowService : Service() {
             windowManager?.addView(mainView, mainParams)
             mainView?.setOnTouchListener { v, event -> onTouchMainView(v, event) }
         } catch (e: Exception) {
-            Log.e(TAG, "主悬浮球创建失败: ${e.message}")
+            // addView 失败常见原因：悬浮窗权限被系统撤销、厂商 ROM 后台弹窗限制。
+            // 不能静默继续运行——否则 ScreenCaptureService 会空跑录屏耗电，用户却看不到悬浮球。
+            Log.e(TAG, "主悬浮球创建失败: ${e.message}", e)
+            android.widget.Toast.makeText(this, "悬浮窗创建失败，请检查悬浮窗权限", android.widget.Toast.LENGTH_LONG).show()
+            // 停止本服务 + 联动停止 ScreenCaptureService，回滚到未启动状态
+            stopService(android.content.Intent(this, ScreenCaptureService::class.java))
+            stopSelf()
         }
     }
 
@@ -737,6 +743,8 @@ class FloatingWindowService : Service() {
             if (translatedText.length < 2) return@mapNotNull null
             if (translatedText.startsWith("翻译失败")) return@mapNotNull null
             if (translatedText.startsWith("翻译错误")) return@mapNotNull null
+            // 未配置 API 时返回的"请配置..."字符串不是有效译文，必须过滤，否则会作为悬浮文字贴在屏幕上
+            if (translatedText.startsWith("请配置")) return@mapNotNull null
             if (containsJapanese(translatedText)) return@mapNotNull null
             if (translatedText.matches(Regex("^[\\p{Punct}\\s]+$"))) return@mapNotNull null
             val lengthRatio = translatedText.length.toFloat() / maxOf(1, originalText.length)

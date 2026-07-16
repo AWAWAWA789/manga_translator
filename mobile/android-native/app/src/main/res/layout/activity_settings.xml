@@ -389,6 +389,41 @@
                 </LinearLayout>
             </LinearLayout>
 
+            <!-- 崩溃日志 -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:background="@drawable/bg_card"
+                android:padding="20dp"
+                android:layout_marginBottom="20dp">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="崩溃日志"
+                    android:textSize="16sp"
+                    android:textStyle="bold"
+                    android:textColor="#333333"
+                    android:layout_marginBottom="10dp" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="查看 App 崩溃记录，便于反馈问题"
+                    android:textSize="13sp"
+                    android:textColor="#666666"
+                    android:layout_marginBottom="10dp" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btn_view_crash_logs"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="查看崩溃日志"
+                    android:textSize="14sp"
+                    android:backgroundTint="#607D8B" />
+            </LinearLayout>
+
             <!-- 说明 -->
             <LinearLayout
                 android:layout_width="match_parent"

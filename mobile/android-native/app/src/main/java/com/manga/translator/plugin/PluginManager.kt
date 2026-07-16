@@ -115,6 +115,8 @@ class PluginManager(private val context: Context) : TranslationRepository {
                     // 检查解析错误：parseResponse 失败时返回带 error 的结果，需回退 OCR 流程
                     if (aiResult.error != null) {
                         AppLog.w("PluginManager", "AI响应解析失败，回退OCR流程: ${aiResult.error}")
+                        // 用户可见反馈：AI 失败静默回退会让用户误以为翻译质量本就差
+                        com.manga.translator.service.FloatingWindowService.setStatusText("AI失败,回退OCR")
                     } else {
                         val rawCards = aiVisionPipeline.toTranslationCards(aiResult, lastTranslationRects)
                         val cards = rawCards.map { card -> card.withOffset(cropRect.left, cropRect.top) }
@@ -130,6 +132,7 @@ class PluginManager(private val context: Context) : TranslationRepository {
                     }
                 } catch (e: Exception) {
                     AppLog.e("PluginManager", "AI多模态失败，回退现有流程: ${e.message}")
+                    com.manga.translator.service.FloatingWindowService.setStatusText("AI失败,回退OCR")
                     // 继续走下面的现有流程
                 }
             }

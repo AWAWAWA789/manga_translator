@@ -236,7 +236,15 @@ class MainActivity : AppCompatActivity() {
             startService(floatingIntent)
             Log.d(TAG, "悬浮窗服务已启动")
         } catch (e: Exception) {
+            // 悬浮窗启动失败时必须回滚：停止已启动的 ScreenCaptureService，重置 UI 状态，
+            // 否则 ScreenCaptureService 会空跑录屏耗电，用户却无悬浮球可交互
             Log.e(TAG, "启动悬浮窗服务失败: ${e.message}", e)
+            stopService(Intent(this, ScreenCaptureService::class.java))
+            isServiceRunning = false
+            binding.btnStart.text = "开始翻译"
+            binding.tvStatus.text = "状态：已停止"
+            Toast.makeText(this, "悬浮窗服务启动失败：${e.message}，请检查悬浮窗权限", Toast.LENGTH_LONG).show()
+            return
         }
 
         isServiceRunning = true

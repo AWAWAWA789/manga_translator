@@ -61,6 +61,10 @@ class SettingsActivity : AppCompatActivity() {
         binding.btnSaveDefaultTranslator.setOnClickListener {
             saveDefaultTranslator()
         }
+
+        binding.btnViewCrashLogs.setOnClickListener {
+            showCrashLogs()
+        }
     }
 
     private fun loadSettings() {
@@ -122,7 +126,14 @@ class SettingsActivity : AppCompatActivity() {
         val finalBaseUrl = if (baseUrl.isBlank()) "https://api.xiaomimimo.com/v1/chat/completions" else baseUrl
         val finalModel = if (model.isBlank()) "mimo-v2.5" else model
 
-        translationPlugin.getMimoTranslator().setConfig(apiKey, finalBaseUrl, finalModel)
+        // setConfig 内部 validateBaseUrl 会抛 IllegalArgumentException（baseUrl 缺 scheme 或 http 非 localhost），
+        // 用户输入不合法时必须捕获并 Toast 提示，否则会通过 CrashHandler 触发"应用已停止"
+        try {
+            translationPlugin.getMimoTranslator().setConfig(apiKey, finalBaseUrl, finalModel)
+        } catch (e: IllegalArgumentException) {
+            Toast.makeText(this, "保存失败：${e.message}", Toast.LENGTH_LONG).show()
+            return
+        }
         updateTranslatorStatus()
         if (SecurePrefs.isEncryptionFailed(this)) {
             Toast.makeText(this, "警告：加密存储初始化失败，API Key 将以明文保存", Toast.LENGTH_LONG).show()
@@ -195,7 +206,15 @@ class SettingsActivity : AppCompatActivity() {
         val finalBaseUrl = if (baseUrl.isBlank()) "https://api.xiaomimimo.com/v1/chat/completions" else baseUrl
         val finalModel = if (model.isBlank()) "mimo-v2.5" else model
 
-        translationPlugin.getMimoTranslator().setConfig(apiKey, finalBaseUrl, finalModel)
+        // setConfig 校验失败时抛 IllegalArgumentException，需捕获后恢复按钮状态并提示，
+        // 否则 btnTestMimo 会被永久禁用且无用户反馈
+        try {
+            translationPlugin.getMimoTranslator().setConfig(apiKey, finalBaseUrl, finalModel)
+        } catch (e: IllegalArgumentException) {
+            if (!isFinishing && !isDestroyed) binding.btnTestMimo.isEnabled = true
+            Toast.makeText(this, "配置校验失败：${e.message}", Toast.LENGTH_LONG).show()
+            return
+        }
         Toast.makeText(this, "正在测试MiMo API...", Toast.LENGTH_SHORT).show()
 
         lifecycleScope.launch {
@@ -218,5 +237,54 @@ class SettingsActivity : AppCompatActivity() {
                     .show()
             }
         }
+    }
+
+    /**
+     * 显示崩溃日志列表，点击单条查看详细堆栈。
+     * 崩溃文件存储在 app private 目录，非 root 设备用户无法直接访问，
+     * 必须提供此入口让用户能查看并反馈崩溃信息。
+     */
+    private fun showCrashLogs() {
+        val crashFiles = com.manga.translator.util.CrashHandler.getCrashFiles()
+        if (crashFiles.isEmpty()) {
+            AlertDialog.Builder(this)
+                .setTitle("崩溃日志")
+                .setMessage("暂无崩溃记录")
+                .setPositiveButton("确定", null)
+                .show()
+            return
+        }
+
+        val displayItems = crashFiles.map { file ->
+            // 文件名格式 crash_yyyy-MM-dd_HH-mm-ss.txt，显示时去掉前缀和扩展名
+            file.name.removePrefix("crash_").removeSuffix(".txt").replace('_', ' ')
+        }.toTypedArray()
+
+        AlertDialog.Builder(this)
+            .setTitle("崩溃日志（共${crashFiles.size}条）")
+            .setItems(displayItems) { _, which ->
+                val file = crashFiles[which]
+                val content = try {
+                    file.readText()
+                } catch (e: Exception) {
+                    "读取失败: ${e.message}"
+                }
+                // 崩溃堆栈可能很长，用 ScrollView 包裹的 TextView 显示
+                val scrollView = android.widget.ScrollView(this)
+                val textView = android.widget.TextView(this).apply {
+                    text = content
+                    textSize = 12f
+                    setPadding(48, 32, 48, 32)
+                    setTextIsSelectable(true)
+                }
+                scrollView.addView(textView)
+                AlertDialog.Builder(this)
+                    .setTitle(displayItems[which])
+                    .setView(scrollView)
+                    .setPositiveButton("关闭", null)
+                    .show()
+            }
+            .setNegativeButton("取消", null)
+            .show()
     }
 }
