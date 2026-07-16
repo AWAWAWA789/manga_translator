@@ -50,28 +50,42 @@ class ScreenCaptureService : Service() {
         const val CHANNEL_ID = "screen_capture_channel"
     }
 
-    private var mediaProjection: MediaProjection? = null
+    // @Volatile：主线程赋值 + executor/captureHandler 线程读取，需保证跨线程可见性
+    @Volatile private var mediaProjection: MediaProjection? = null
+
     private var mediaProjectionCallback: MediaProjection.Callback? = null
-    private var virtualDisplay: VirtualDisplay? = null
-    private var imageReader: ImageReader? = null
-    private var screenWidth = 1080
-    private var screenHeight = 1920
-    private var screenDensity = 320
-    private var realScreenWidth = 1080
-    private var realScreenHeight = 1920
-    private var scaleFactor = 1.0f
-    private var scaleFactorY = 1.0f // Y 方向独立缩放因子（screenHeight 可能被 clamp 到 1920）
+
+    @Volatile private var virtualDisplay: VirtualDisplay? = null
+
+    @Volatile private var imageReader: ImageReader? = null
+
+    @Volatile private var screenWidth = 1080
+
+    @Volatile private var screenHeight = 1920
+
+    @Volatile private var screenDensity = 320
+
+    @Volatile private var realScreenWidth = 1080
+
+    @Volatile private var realScreenHeight = 1920
+
+    @Volatile private var scaleFactor = 1.0f
+
+    // Y 方向独立缩放因子（screenHeight 可能被 clamp 到 1920）
+    @Volatile private var scaleFactorY = 1.0f
 
     // @Volatile：主线程赋值、executor 线程读取、协程置 null，需保证跨线程可见性
     @Volatile private var ocrProcessor: OcrProcessor? = null
 
     @Volatile private var pluginManager: TranslationController? = null
 
-    private var handler: Handler? = null
+    @Volatile private var handler: Handler? = null
 
     // 后台 HandlerThread：帧监听器的 Bitmap 转换在后台线程执行，避免阻塞主线程
-    private var captureHandlerThread: HandlerThread? = null
-    private var captureHandler: Handler? = null
+    @Volatile private var captureHandlerThread: HandlerThread? = null
+
+    @Volatile private var captureHandler: Handler? = null
+
     private val executor = java.util.concurrent.ThreadPoolExecutor(
         3,
         3,
@@ -115,6 +129,17 @@ class ScreenCaptureService : Service() {
     // 记录本次翻译流程开始时间，用于检测 isProcessing 卡死（8 秒超时强制重置）
     // AtomicLong 保证跨线程可见性，与 AtomicBoolean isProcessing 一致
     private val processingStartTimeMs = AtomicLong(0L)
+
+    // 状态复位锁：isProcessing / isManualTranslating 必须原子地同时复位，
+    // 防止并发调用观察到中间态（processing=false 但 manual=true）导致状态机错乱
+    private val stateLock = Any()
+
+    private fun resetProcessingState() {
+        synchronized(stateLock) {
+            isProcessing.set(false)
+            isManualTranslating.set(false)
+        }
+    }
 
     // 帧缓存：OnImageAvailableListener 持续消费帧，始终保持最新帧可用
     @Volatile private var cachedBitmap: Bitmap? = null
@@ -415,27 +440,29 @@ class ScreenCaptureService : Service() {
 
     private fun executeOneShotTranslation() {
         if (!isRunning.get()) return
-        if (!isProcessing.compareAndSet(false, true)) {
-            AppLog.w("ScreenCapture", "已有翻译任务进行中，检查是否卡住")
-            // Safety: force reset if stuck for too long
-            if (System.currentTimeMillis() - processingStartTimeMs.get() > 8000) {
-                AppLog.w("ScreenCapture", "isProcessing 卡住超过8秒，强制重置")
-                isProcessing.set(false)
-                isManualTranslating.set(false)
-                restoreFloatingUiAfterCapture()
-                // Retry after reset：重试前必须再次校验运行状态，避免服务停止后触发无意义截图
-                handler?.postDelayed({
-                    if (isRunning.get()) {
-                        executeOneShotTranslation()
-                    } else {
-                        AppLog.d("ScreenCapture", "重试前状态已变更（running=${isRunning.get()}），跳过重试")
-                    }
-                }, 200)
+        synchronized(stateLock) {
+            if (!isProcessing.compareAndSet(false, true)) {
+                AppLog.w("ScreenCapture", "已有翻译任务进行中，检查是否卡住")
+                // Safety: force reset if stuck for too long
+                if (System.currentTimeMillis() - processingStartTimeMs.get() > 8000) {
+                    AppLog.w("ScreenCapture", "isProcessing 卡住超过8秒，强制重置")
+                    isProcessing.set(false)
+                    isManualTranslating.set(false)
+                    restoreFloatingUiAfterCapture()
+                    // Retry after reset：重试前必须再次校验运行状态，避免服务停止后触发无意义截图
+                    handler?.postDelayed({
+                        if (isRunning.get()) {
+                            executeOneShotTranslation()
+                        } else {
+                            AppLog.d("ScreenCapture", "重试前状态已变更（running=${isRunning.get()}），跳过重试")
+                        }
+                    }, 200)
+                }
+                return
             }
-            return
+            processingStartTimeMs.set(System.currentTimeMillis())
+            isManualTranslating.set(true)
         }
-        processingStartTimeMs.set(System.currentTimeMillis())
-        isManualTranslating.set(true)
         FloatingWindowService.clearAllTranslations()
         FloatingWindowService.setStatusText("...")
 
@@ -447,8 +474,7 @@ class ScreenCaptureService : Service() {
 
     private fun doOneShotCapture(retryCount: Int) {
         if (!isRunning.get() || !isManualTranslating.get()) {
-            isManualTranslating.set(false)
-            isProcessing.set(false)
+            resetProcessingState()
             restoreFloatingUiAfterCapture()
             return
         }
@@ -488,8 +514,7 @@ class ScreenCaptureService : Service() {
                 } else {
                     AppLog.e("ScreenCapture", "单次翻译失败：多次重试后仍无图像")
                     handler?.post {
-                        isManualTranslating.set(false)
-                        isProcessing.set(false)
+                        resetProcessingState()
                         FloatingWindowService.setStatusText("未截取到画面")
                         restoreFloatingUiAfterCapture()
                     }
@@ -497,8 +522,7 @@ class ScreenCaptureService : Service() {
             } catch (e: Exception) {
                 AppLog.e("ScreenCapture", "单次翻译失败: ${e.message}")
                 handler?.post {
-                    isManualTranslating.set(false)
-                    isProcessing.set(false)
+                    resetProcessingState()
                     FloatingWindowService.setStatusText("翻译失败")
                     restoreFloatingUiAfterCapture()
                 }
@@ -506,8 +530,7 @@ class ScreenCaptureService : Service() {
         }
         if (!submitted) {
             // executor 已关闭或任务被拒绝，重置翻译状态
-            isManualTranslating.set(false)
-            isProcessing.set(false)
+            resetProcessingState()
             restoreFloatingUiAfterCapture()
         }
     }
@@ -651,8 +674,7 @@ class ScreenCaptureService : Service() {
         if (executor.isShutdown) {
             AppLog.w("ScreenCapture", "processImage: executor 已关闭，直接 recycle bitmap")
             try { bitmap.recycle() } catch (_: Exception) {}
-            isProcessing.set(false)
-            isManualTranslating.set(false)
+            resetProcessingState()
             return
         }
         val submitted = safeSubmit {
@@ -679,16 +701,14 @@ class ScreenCaptureService : Service() {
                 handler?.postDelayed({ FloatingWindowService.updateMainAppearance() }, 1200L)
             } finally {
                 tracker.finish()
-                isProcessing.set(false)
-                isManualTranslating.set(false)
+                resetProcessingState()
                 if (!completionStatusScheduled) restoreFloatingUiAfterCapture()
             }
         }
         if (!submitted) {
             // TOCTOU：检查与 submit 之间 executor 被关闭，recycle bitmap 并重置状态
             try { bitmap.recycle() } catch (_: Exception) {}
-            isProcessing.set(false)
-            isManualTranslating.set(false)
+            resetProcessingState()
         }
     }
 

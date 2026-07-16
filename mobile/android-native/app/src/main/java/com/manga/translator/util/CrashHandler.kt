@@ -18,7 +18,11 @@ object CrashHandler : Thread.UncaughtExceptionHandler {
 
     private const val TAG = "CrashHandler"
     private const val CRASH_DIR = "crash"
-    private lateinit var context: Context
+
+    @Volatile
+    private var context: Context? = null
+
+    @Volatile
     private var defaultHandler: Thread.UncaughtExceptionHandler? = null
 
     fun init(context: Context) {
@@ -35,8 +39,12 @@ object CrashHandler : Thread.UncaughtExceptionHandler {
     }
 
     private fun writeCrashToFile(thread: Thread, throwable: Throwable) {
+        val ctx = context ?: run {
+            Log.e(TAG, "CrashHandler 未初始化，跳过崩溃日志写入")
+            return
+        }
         try {
-            val crashDir = File(context.filesDir, CRASH_DIR)
+            val crashDir = File(ctx.filesDir, CRASH_DIR)
             if (!crashDir.exists()) crashDir.mkdirs()
             val dateFormat = SimpleDateFormat("yyyy-MM-dd_HH-mm-ss", Locale.CHINA)
             val fileName = "crash_${dateFormat.format(Date())}.txt"
@@ -66,8 +74,8 @@ object CrashHandler : Thread.UncaughtExceptionHandler {
      * 按修改时间降序排列（最新在前）。
      */
     fun getCrashFiles(): List<File> {
-        if (!::context.isInitialized) return emptyList()
-        val crashDir = File(context.filesDir, CRASH_DIR)
+        val ctx = context ?: return emptyList()
+        val crashDir = File(ctx.filesDir, CRASH_DIR)
         return crashDir.listFiles()?.sortedByDescending { it.lastModified() } ?: emptyList()
     }
 }

@@ -298,6 +298,14 @@ class TranslationPlugin(private val context: Context) : Translator {
     fun close() {
         translationCache.evictAll()
         fallbackExecutor.shutdown()
+        try {
+            if (!fallbackExecutor.awaitTermination(2, java.util.concurrent.TimeUnit.SECONDS)) {
+                fallbackExecutor.shutdownNow()
+            }
+        } catch (e: InterruptedException) {
+            Thread.currentThread().interrupt()
+            fallbackExecutor.shutdownNow()
+        }
     }
 
     private fun putCache(key: String, value: String) {

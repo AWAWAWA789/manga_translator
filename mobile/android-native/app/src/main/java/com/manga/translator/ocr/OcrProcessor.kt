@@ -25,6 +25,10 @@ class OcrProcessor(private val context: Context) {
 
     companion object {
         private const val TIMEOUT_SECONDS = 15L
+
+        // Tasks.await 首次超时后，ML Kit 任务可能仍在后台执行并持有 bitmap 引用。
+        // 二次等待给任务真正完成的时间，避免调用方 recycle bitmap 触发 native 崩溃。
+        private const val EXTRA_TIMEOUT_SECONDS = 10L
         private const val MIN_TEXT_LENGTH = 2
         private const val MAX_OCR_SIZE = 1600
         private const val OVERLAP_THRESHOLD = 45
@@ -367,10 +371,21 @@ class OcrProcessor(private val context: Context) {
     ): List<OcrResult> {
         val results = mutableListOf<OcrResult>()
         val image = InputImage.fromBitmap(bitmap, 0)
+        val task = textRecognizer.process(image)
 
         val visionText = try {
             // 同步等待 ML Kit 结果，超时抛 TimeoutException
-            Tasks.await(textRecognizer.process(image), TIMEOUT_SECONDS, TimeUnit.SECONDS)
+            Tasks.await(task, TIMEOUT_SECONDS, TimeUnit.SECONDS)
+        } catch (e: java.util.concurrent.TimeoutException) {
+            AppLog.e("OcrProcessor", "OCR超时，等待后台任务完成以防 bitmap 回收竞态: ${e.message}")
+            // 超时后 ML Kit 任务可能仍在执行并持有 bitmap 引用。
+            // 阻塞等待任务真正完成，避免调用方 recycle bitmap 触发 native 崩溃。
+            try {
+                Tasks.await(task, EXTRA_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+            } catch (_: Exception) {
+                AppLog.w("OcrProcessor", "ML Kit 任务二次等待仍失败，bitmap 回收存在风险")
+            }
+            return results
         } catch (e: Exception) {
             AppLog.e("OcrProcessor", "OCR失败: ${e.message}")
             return results

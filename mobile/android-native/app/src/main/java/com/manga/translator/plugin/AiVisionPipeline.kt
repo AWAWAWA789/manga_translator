@@ -18,6 +18,7 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.ByteArrayOutputStream
 
+@Suppress("LargeClass")
 class AiVisionPipeline(private val context: Context) {
 
     companion object {
@@ -74,7 +75,13 @@ class AiVisionPipeline(private val context: Context) {
             callMimoVisionApi(base64Image, prompt)
         } catch (e: Exception) {
             Log.w(TAG, "AI识别首次失败，3秒后重试: ${e.message}")
-            Thread.sleep(3000)
+            try {
+                Thread.sleep(3000)
+            } catch (ie: InterruptedException) {
+                Thread.currentThread().interrupt()
+                Log.w(TAG, "AI识别重试等待被中断，抛出原始异常: ${ie.message}")
+                throw e
+            }
             callMimoVisionApi(base64Image, prompt)
         }
         val result = parseResponse(response, scaledWidth, scaledHeight)
