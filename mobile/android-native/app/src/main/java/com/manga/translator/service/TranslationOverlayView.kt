@@ -545,7 +545,8 @@ class TranslationOverlayView(context: Context) : View(context) {
             val row = i % maxCharsPerCol
             val x = startX - col * columnGap
             val y = startY + row * lineHeight
-            canvas.drawText(text[i].toString(), x, y, textPaint)
+            // 使用 drawText(text, start, end) 重载，避免每字符分配 String 产生 GC 压力
+            canvas.drawText(text, i, i + 1, x, y, textPaint)
         }
         canvas.restore()
         textPaint.textAlign = Paint.Align.LEFT

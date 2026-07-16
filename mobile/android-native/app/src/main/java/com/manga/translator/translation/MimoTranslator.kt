@@ -224,23 +224,25 @@ $source"""
             .addHeader("Authorization", "Bearer $apiKey")
             .build()
 
-        val response = client.newCall(httpRequest).execute()
-        val responseBody = response.body?.string() ?: throw Exception("响应为空")
+        // use{} 确保 Response 在异常路径下也关闭，避免连接泄漏
+        client.newCall(httpRequest).execute().use { response ->
+            val responseBody = response.body?.string() ?: throw Exception("响应为空")
 
-        if (!response.isSuccessful) {
-            throw Exception("HTTP错误: ${response.code}")
+            if (!response.isSuccessful) {
+                throw Exception("HTTP错误: ${response.code}")
+            }
+
+            val result = gson.fromJson(responseBody, ChatResponse::class.java)
+
+            if (result.error != null) {
+                throw Exception("MiMo错误: ${result.error.message}")
+            }
+
+            val content = result.choices?.firstOrNull()?.message?.content
+                ?: throw Exception("翻译结果为空")
+
+            return content.trim()
         }
-
-        val result = gson.fromJson(responseBody, ChatResponse::class.java)
-
-        if (result.error != null) {
-            throw Exception("MiMo错误: ${result.error.message}")
-        }
-
-        val content = result.choices?.firstOrNull()?.message?.content
-            ?: throw Exception("翻译结果为空")
-
-        return content.trim()
     }
 
     private fun cleanOutput(text: String): String {

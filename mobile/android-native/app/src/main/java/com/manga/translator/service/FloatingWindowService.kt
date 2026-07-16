@@ -123,6 +123,9 @@ class FloatingWindowService : Service() {
     private var isMenuShowing = false
     private var isAnimating = false
 
+    // 动画超时兜底：withEndAction 在动画异常时不触发，isAnimating 会永久卡死导致菜单无法操作
+    private val animTimeoutRunnable = Runnable { isAnimating = false }
+
     private var translationOverlayView: TranslationOverlayView? = null
     private var translationRemoveRunnable: Runnable? = null
     private var isDragging = false
@@ -266,7 +269,9 @@ class FloatingWindowService : Service() {
                     mainParams?.let { p ->
                         p.x = lastMainX - dx.toInt()
                         p.y = lastMainY + dy.toInt()
-                        try { windowManager?.updateViewLayout(view, p) } catch (_: Exception) {}
+                        try { windowManager?.updateViewLayout(view, p) } catch (e: Exception) {
+                            Log.w(TAG, "拖动 updateViewLayout 失败: ${e.message}")
+                        }
                     }
                 }
                 return true
@@ -306,6 +311,8 @@ class FloatingWindowService : Service() {
         val mainViewRef = mainView ?: return
         isAnimating = true
         isMenuShowing = true
+        // 兜底：动画链总时长约 350ms，1 秒后强制重置避免 withEndAction 异常不触发导致卡死
+        handler.postDelayed(animTimeoutRunnable, 1000)
 
         // 设置悬浮球中心为缩放支点
         mainViewRef.pivotX = mainViewRef.width / 2f
@@ -334,6 +341,7 @@ class FloatingWindowService : Service() {
                     mainViewRef.scaleY = 1f
                     mainViewRef.alpha = 1f
                     isMenuShowing = false
+                    handler.removeCallbacks(animTimeoutRunnable)
                     isAnimating = false
                 }
             }
@@ -349,6 +357,7 @@ class FloatingWindowService : Service() {
             mainView?.scaleY = 1f
             mainView?.alpha = 1f
             isMenuShowing = false
+            handler.removeCallbacks(animTimeoutRunnable)
             isAnimating = false
             return
         }
@@ -473,8 +482,9 @@ class FloatingWindowService : Service() {
         // 菜单位置基于悬浮球当前位置（mainParams 的 x, y）
         val mainX = mainParams?.x ?: (16 * d).toInt()
         val mainY = mainParams?.y ?: (300 * d).toInt()
+        // 固定宽度避免 WRAP_CONTENT + MATCH_PARENT 子项 + weight=1 在 AT_MOST 约束下测量失控
         menuParams = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.WRAP_CONTENT,
+            (220 * d).toInt(),
             WindowManager.LayoutParams.WRAP_CONTENT,
             getWindowType(),
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
@@ -513,7 +523,10 @@ class FloatingWindowService : Service() {
                 .scaleY(1f)
                 .alpha(1f)
                 .setDuration(200)
-                .withEndAction { isAnimating = false }
+                .withEndAction {
+                    handler.removeCallbacks(animTimeoutRunnable)
+                    isAnimating = false
+                }
                 .start()
         }
     }
@@ -653,6 +666,8 @@ class FloatingWindowService : Service() {
         if (!isMenuShowing || isAnimating) return
         val view = menuView ?: return
         isAnimating = true
+        // 兜底：动画链总时长约 350ms，1 秒后强制重置
+        handler.postDelayed(animTimeoutRunnable, 1000)
 
         // 设置菜单中心为缩放支点
         view.pivotX = view.width / 2f
@@ -666,7 +681,9 @@ class FloatingWindowService : Service() {
             .setDuration(150)
             .withEndAction {
                 // 移除菜单视图
-                try { windowManager?.removeViewImmediate(view) } catch (_: Exception) {}
+                try { windowManager?.removeViewImmediate(view) } catch (e: Exception) {
+                    Log.w(TAG, "hideMenu removeViewImmediate 失败: ${e.message}")
+                }
                 menuView = null
                 menuParams = null
                 isMenuShowing = false
@@ -674,12 +691,14 @@ class FloatingWindowService : Service() {
                 // 悬浮球出现动画：scale 0.9→1 + alpha 0→1（200ms）
                 val mv = mainView
                 if (mv == null) {
+                    handler.removeCallbacks(animTimeoutRunnable)
                     isAnimating = false
                 } else if (isUIHiddenForCapture) {
                     // 截图模式下保持悬浮球不可见，仅恢复缩放/透明度状态
                     mv.scaleX = 1f
                     mv.scaleY = 1f
                     mv.alpha = 1f
+                    handler.removeCallbacks(animTimeoutRunnable)
                     isAnimating = false
                 } else {
                     mv.visibility = View.VISIBLE
@@ -693,7 +712,10 @@ class FloatingWindowService : Service() {
                         .scaleY(1f)
                         .alpha(1f)
                         .setDuration(200)
-                        .withEndAction { isAnimating = false }
+                        .withEndAction {
+                            handler.removeCallbacks(animTimeoutRunnable)
+                            isAnimating = false
+                        }
                         .start()
                 }
             }
@@ -887,11 +909,16 @@ class FloatingWindowService : Service() {
     private fun cleanup() {
         // 1. 先同步移除所有 View（含 menuView），不依赖 hideMenu 动画的 withEndAction 回调，
         //    避免 windowManager 被置空后回调被 ?. 安全跳过，导致 menuView 仍挂在 WindowManager 上
-        try { menuView?.let { windowManager?.removeViewImmediate(it) } } catch (_: Exception) {}
+        try { menuView?.let { windowManager?.removeViewImmediate(it) } } catch (e: Exception) {
+            Log.w(TAG, "cleanup menuView removeViewImmediate 失败: ${e.message}")
+        }
         isMenuShowing = false
+        handler.removeCallbacks(animTimeoutRunnable)
         isAnimating = false
         removeAllTranslationOverlays()
-        try { mainView?.let { windowManager?.removeViewImmediate(it) } } catch (_: Exception) {}
+        try { mainView?.let { windowManager?.removeViewImmediate(it) } } catch (e: Exception) {
+            Log.w(TAG, "cleanup mainView removeViewImmediate 失败: ${e.message}")
+        }
         // 2. 清除所有 pending message（含 hideMenu 动画 withEndAction 投递的回调）
         handler.removeCallbacksAndMessages(null)
         longPressRunnable = null

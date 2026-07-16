@@ -61,8 +61,11 @@ class ScreenCaptureService : Service() {
     private var scaleFactor = 1.0f
     private var scaleFactorY = 1.0f // Y 方向独立缩放因子（screenHeight 可能被 clamp 到 1920）
 
-    private var ocrProcessor: OcrProcessor? = null
-    private var pluginManager: TranslationController? = null
+    // @Volatile：主线程赋值、executor 线程读取、协程置 null，需保证跨线程可见性
+    @Volatile private var ocrProcessor: OcrProcessor? = null
+
+    @Volatile private var pluginManager: TranslationController? = null
+
     private var handler: Handler? = null
 
     // 后台 HandlerThread：帧监听器的 Bitmap 转换在后台线程执行，避免阻塞主线程
@@ -749,15 +752,18 @@ class ScreenCaptureService : Service() {
         captureHandlerThread = null
         captureHandler = null
 
-        imageReader?.close()
+        // 每个资源独立 safeClose，避免任一 close 抛异常导致后续资源不释放
+        safeClose("imageReader") { imageReader?.close() }
         imageReader = null
 
         // 4-5. 释放 VirtualDisplay 和 MediaProjection
-        virtualDisplay?.release()
+        safeClose("virtualDisplay") { virtualDisplay?.release() }
         virtualDisplay = null
-        mediaProjectionCallback?.let { mediaProjection?.unregisterCallback(it) }
+        safeClose("mediaProjection.unregisterCallback") {
+            mediaProjectionCallback?.let { mediaProjection?.unregisterCallback(it) }
+        }
         mediaProjectionCallback = null
-        mediaProjection?.stop()
+        safeClose("mediaProjection") { mediaProjection?.stop() }
         mediaProjection = null
 
         // 6. 清理帧缓存
@@ -767,10 +773,19 @@ class ScreenCaptureService : Service() {
         }
 
         // 7-8. 释放 native 资源（必须在 executor 任务全部完成后）
-        pluginManager?.close()
+        safeClose("pluginManager") { pluginManager?.close() }
         pluginManager = null
-        ocrProcessor?.close()
+        safeClose("ocrProcessor") { ocrProcessor?.close() }
         ocrProcessor = null
+    }
+
+    /** 安全关闭资源：捕获异常并记日志，避免单资源失败阻断后续资源释放 */
+    private inline fun safeClose(tag: String, action: () -> Unit) {
+        try {
+            action()
+        } catch (e: Throwable) {
+            AppLog.w("ScreenCapture", "$tag 关闭失败: ${e.message}")
+        }
     }
 
     override fun onBind(intent: Intent?): IBinder? = null

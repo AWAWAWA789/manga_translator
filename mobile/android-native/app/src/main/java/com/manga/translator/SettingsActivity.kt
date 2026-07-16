@@ -29,6 +29,14 @@ class SettingsActivity : AppCompatActivity() {
         loadSettings()
     }
 
+    override fun onDestroy() {
+        super.onDestroy()
+        // TranslationPlugin 内部持有 OkHttp 线程池，Activity 销毁时必须 close 避免线程泄漏
+        if (::translationPlugin.isInitialized) {
+            translationPlugin.close()
+        }
+    }
+
     private fun setupUI() {
         binding.btnSaveBaidu.setOnClickListener {
             saveBaiduConfig()
