@@ -35,9 +35,11 @@ class FloatingWindowService : Service() {
 
         enum class RecognitionDirection { HORIZONTAL, VERTICAL }
 
-        var onManualTranslate: (() -> Unit)? = null
-        var onRecognitionDirectionChanged: ((RecognitionDirection) -> Unit)? = null
-        var onAiVisionModeChanged: ((Boolean) -> Unit)? = null
+        @Volatile var onManualTranslate: (() -> Unit)? = null
+
+        @Volatile var onRecognitionDirectionChanged: ((RecognitionDirection) -> Unit)? = null
+
+        @Volatile var onAiVisionModeChanged: ((Boolean) -> Unit)? = null
 
         /** 安全调用回调，防止目标服务已销毁导致崩溃 */
         private inline fun safeCallback(noinline callback: (() -> Unit)?) {
@@ -86,7 +88,7 @@ class FloatingWindowService : Service() {
 
         fun setDebugConfig(config: DebugOverlayConfig) {
             debugConfig = config
-            instance?.translationOverlayView?.setDebugConfig(config)
+            instance?.handler?.post { instance?.translationOverlayView?.setDebugConfig(config) }
         }
 
         fun hideFloatingUI() {
@@ -127,7 +129,7 @@ class FloatingWindowService : Service() {
     // 动画超时兜底：withEndAction 在动画异常时不触发，isAnimating 会永久卡死导致菜单无法操作
     private val animTimeoutRunnable = Runnable { isAnimating = false }
 
-    private var translationOverlayView: TranslationOverlayView? = null
+    @Volatile private var translationOverlayView: TranslationOverlayView? = null
     private var translationRemoveRunnable: Runnable? = null
     private var isDragging = false
     private var lastTouchX = 0f
@@ -164,6 +166,8 @@ class FloatingWindowService : Service() {
         onAiVisionModeChanged = null
         // 取消所有子协程，避免 Service 销毁后协程仍在运行导致内存泄漏与崩溃
         serviceScope.cancel()
+        // 清除所有待执行消息，避免销毁后 Runnable 访问已释放的 View
+        handler.removeCallbacksAndMessages(null)
         cleanup()
         super.onDestroy()
     }

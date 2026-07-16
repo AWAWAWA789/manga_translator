@@ -38,6 +38,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 
 class ScreenCaptureService : Service() {
 
@@ -93,15 +94,17 @@ class ScreenCaptureService : Service() {
      * 安全提交任务到 executor，防止 Service 销毁后 submit 抛 RejectedExecutionException 导致主线程崩溃。
      * DiscardOldestPolicy 在队列满时丢弃最旧任务，但 executor 已 shutdown 时仍会抛 RejectedExecutionException。
      */
-    private fun safeSubmit(action: () -> Unit) {
+    private fun safeSubmit(action: () -> Unit): Boolean {
         if (executor.isShutdown) {
             AppLog.w("ScreenCapture", "executor 已关闭，跳过任务提交")
-            return
+            return false
         }
-        try {
+        return try {
             executor.submit(action)
+            true
         } catch (e: java.util.concurrent.RejectedExecutionException) {
             AppLog.w("ScreenCapture", "任务被拒绝: ${e.message}")
+            false
         }
     }
 
@@ -110,7 +113,8 @@ class ScreenCaptureService : Service() {
     private val isManualTranslating = AtomicBoolean(false)
 
     // 记录本次翻译流程开始时间，用于检测 isProcessing 卡死（8 秒超时强制重置）
-    private var processingStartTimeMs = 0L
+    // AtomicLong 保证跨线程可见性，与 AtomicBoolean isProcessing 一致
+    private val processingStartTimeMs = AtomicLong(0L)
 
     // 帧缓存：OnImageAvailableListener 持续消费帧，始终保持最新帧可用
     @Volatile private var cachedBitmap: Bitmap? = null
@@ -414,7 +418,7 @@ class ScreenCaptureService : Service() {
         if (!isProcessing.compareAndSet(false, true)) {
             AppLog.w("ScreenCapture", "已有翻译任务进行中，检查是否卡住")
             // Safety: force reset if stuck for too long
-            if (System.currentTimeMillis() - processingStartTimeMs > 8000) {
+            if (System.currentTimeMillis() - processingStartTimeMs.get() > 8000) {
                 AppLog.w("ScreenCapture", "isProcessing 卡住超过8秒，强制重置")
                 isProcessing.set(false)
                 isManualTranslating.set(false)
@@ -430,7 +434,7 @@ class ScreenCaptureService : Service() {
             }
             return
         }
-        processingStartTimeMs = System.currentTimeMillis()
+        processingStartTimeMs.set(System.currentTimeMillis())
         isManualTranslating.set(true)
         FloatingWindowService.clearAllTranslations()
         FloatingWindowService.setStatusText("...")
@@ -449,7 +453,7 @@ class ScreenCaptureService : Service() {
             return
         }
 
-        safeSubmit {
+        val submitted = safeSubmit {
             try {
                 // 诊断日志
                 AppLog.d(
@@ -499,6 +503,12 @@ class ScreenCaptureService : Service() {
                     restoreFloatingUiAfterCapture()
                 }
             }
+        }
+        if (!submitted) {
+            // executor 已关闭或任务被拒绝，重置翻译状态
+            isManualTranslating.set(false)
+            isProcessing.set(false)
+            restoreFloatingUiAfterCapture()
         }
     }
 
@@ -636,19 +646,16 @@ class ScreenCaptureService : Service() {
      */
     private fun processImage(bitmap: Bitmap) {
         // executor 可能已在 onDestroy 中被 shutdown，
-        // 此时 safeSubmit 会静默 return，导致 bitmap 泄漏。
-        // 提前检查，若 executor 已关闭则直接 recycle。
+        // 此时 safeSubmit 返回 false，需 recycle bitmap 并重置状态。
+        // 前置检查避免不必要的 submit 尝试，TOCTOU 由 safeSubmit 返回值兜底。
         if (executor.isShutdown) {
             AppLog.w("ScreenCapture", "processImage: executor 已关闭，直接 recycle bitmap")
-            try {
-                bitmap.recycle()
-            } catch (_: Exception) {
-            }
+            try { bitmap.recycle() } catch (_: Exception) {}
             isProcessing.set(false)
             isManualTranslating.set(false)
             return
         }
-        safeSubmit {
+        val submitted = safeSubmit {
             var completionStatusScheduled = false
             val tracker = PerfTracker.start("翻译", "一次翻译流程")
             try {
@@ -676,6 +683,12 @@ class ScreenCaptureService : Service() {
                 isManualTranslating.set(false)
                 if (!completionStatusScheduled) restoreFloatingUiAfterCapture()
             }
+        }
+        if (!submitted) {
+            // TOCTOU：检查与 submit 之间 executor 被关闭，recycle bitmap 并重置状态
+            try { bitmap.recycle() } catch (_: Exception) {}
+            isProcessing.set(false)
+            isManualTranslating.set(false)
         }
     }
 
@@ -705,35 +718,67 @@ class ScreenCaptureService : Service() {
         // 取消所有子协程，避免 Service 销毁后协程仍在运行
         serviceScope.cancel()
 
-        // 异步清理：避免 executor.awaitTermination 阻塞主线程导致 ANR。
-        // 使用 appScope（生命周期与 Application 相同）而非 serviceScope（已被 cancel），
-        // 确保 cleanupResources 执行完成。
-        MangaTranslatorApp.appScope.launch {
-            cleanupResources()
-        }
+        // 清除待执行消息，避免销毁后 Runnable 访问已释放资源
+        handler?.removeCallbacksAndMessages(null)
 
+        // 同步释放截图管线（快操作），防止进程被杀时 native 资源泄漏
+        releaseCapturePipeline()
+
+        // 异步释放 executor + native 插件（慢操作），避免主线程 ANR
+        MangaTranslatorApp.appScope.launch { releaseNativePlugins() }
+
+        // 清理静态回调引用，避免持有已销毁 Service 导致泄漏
         FloatingWindowService.onManualTranslate = null
         FloatingWindowService.onRecognitionDirectionChanged = null
+        FloatingWindowService.onAiVisionModeChanged = null
 
         super.onDestroy()
     }
 
     /**
-     * 后台线程释放所有资源。
+     * 同步释放截图管线（MediaProjection/VirtualDisplay/ImageReader/帧缓存）。
      *
-     * 释放顺序设计：
-     * 1. executor.shutdown：停止接收新任务，等待已提交任务完成（最多 5s）
-     * 2. captureHandlerThread.quitSafely：停止 ImageReader 监听器回调
-     * 3. imageReader.close：释放 ImageReader，此时监听器已停止，不会并发访问
-     * 4. virtualDisplay.release：释放 VirtualDisplay
-     * 5. mediaProjection.unregisterCallback + stop：释放 MediaProjection
-     * 6. 清理 Bitmap 缓存
-     * 7. pluginManager.close：释放 native 资源（OpenCV Mat 等）
-     * 8. ocrProcessor.close：释放 ML Kit TextRecognizer
+     * 这些操作耗时短（<10ms），在 onDestroy 主线程同步执行，
+     * 防止进程被系统杀死时 native 资源泄漏。
      */
-    private fun cleanupResources() {
-        // 1. 停止 executor 接收新任务，等待正在执行的任务完成（最多 5 秒），
-        // 避免 pluginManager.close() 在 executor 任务执行期间释放 native 资源导致 SIGSEGV
+    private fun releaseCapturePipeline() {
+        // 停止后台 HandlerThread，短超时 join 避免主线程阻塞
+        captureHandlerThread?.quitSafely()
+        try {
+            captureHandlerThread?.join(200)
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+        }
+        captureHandlerThread = null
+        captureHandler = null
+
+        // 每个资源独立 safeClose，避免任一 close 抛异常导致后续资源不释放
+        safeClose("imageReader") { imageReader?.close() }
+        imageReader = null
+        safeClose("virtualDisplay") { virtualDisplay?.release() }
+        virtualDisplay = null
+        safeClose("mediaProjection.unregisterCallback") {
+            mediaProjectionCallback?.let { mediaProjection?.unregisterCallback(it) }
+        }
+        mediaProjectionCallback = null
+        safeClose("mediaProjection") { mediaProjection?.stop() }
+        mediaProjection = null
+
+        // 清理帧缓存
+        synchronized(cachedBitmapLock) {
+            cachedBitmap?.recycle()
+            cachedBitmap = null
+        }
+    }
+
+    /**
+     * 异步释放 native 插件资源（executor/PluginManager/OcrProcessor）。
+     *
+     * executor.awaitTermination 最长 5s，不能在主线程执行。
+     * 必须在 [releaseCapturePipeline] 之后执行，确保截图管线已停止。
+     * native 资源释放必须在 executor 任务全部完成后，避免 SIGSEGV。
+     */
+    private fun releaseNativePlugins() {
         executor.shutdown()
         try {
             if (!executor.awaitTermination(5, java.util.concurrent.TimeUnit.SECONDS)) {
@@ -746,38 +791,6 @@ class ScreenCaptureService : Service() {
             Thread.currentThread().interrupt()
         }
 
-        // 2. 先停止后台 HandlerThread，确保 ImageReader 监听器不再回调
-        // 3. 再关闭 ImageReader，避免监听器在 close 期间并发访问已关闭的 ImageReader
-        captureHandlerThread?.quitSafely()
-        try {
-            captureHandlerThread?.join(1000)
-        } catch (_: InterruptedException) {
-            Thread.currentThread().interrupt()
-        }
-        captureHandlerThread = null
-        captureHandler = null
-
-        // 每个资源独立 safeClose，避免任一 close 抛异常导致后续资源不释放
-        safeClose("imageReader") { imageReader?.close() }
-        imageReader = null
-
-        // 4-5. 释放 VirtualDisplay 和 MediaProjection
-        safeClose("virtualDisplay") { virtualDisplay?.release() }
-        virtualDisplay = null
-        safeClose("mediaProjection.unregisterCallback") {
-            mediaProjectionCallback?.let { mediaProjection?.unregisterCallback(it) }
-        }
-        mediaProjectionCallback = null
-        safeClose("mediaProjection") { mediaProjection?.stop() }
-        mediaProjection = null
-
-        // 6. 清理帧缓存
-        synchronized(cachedBitmapLock) {
-            cachedBitmap?.recycle()
-            cachedBitmap = null
-        }
-
-        // 7-8. 释放 native 资源（必须在 executor 任务全部完成后）
         safeClose("pluginManager") { pluginManager?.close() }
         pluginManager = null
         safeClose("ocrProcessor") { ocrProcessor?.close() }
