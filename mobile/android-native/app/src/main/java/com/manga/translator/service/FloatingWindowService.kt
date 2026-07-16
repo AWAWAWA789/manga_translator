@@ -158,6 +158,10 @@ class FloatingWindowService : Service() {
 
     override fun onDestroy() {
         instance = null
+        // 清理静态回调引用，避免持有 ScreenCaptureService 导致双向 Service 泄漏
+        onManualTranslate = null
+        onRecognitionDirectionChanged = null
+        onAiVisionModeChanged = null
         // 取消所有子协程，避免 Service 销毁后协程仍在运行导致内存泄漏与崩溃
         serviceScope.cancel()
         cleanup()

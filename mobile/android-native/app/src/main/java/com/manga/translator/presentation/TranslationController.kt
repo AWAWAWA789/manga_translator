@@ -12,19 +12,18 @@ import com.manga.translator.util.ScreenCropConfig
  * 翻译控制器（presentation 层）。
  *
  * 职责：
- * 1. 管理翻译流程的状态（cropConfig、useAiVisionMode、lastDebugData）
+ * 1. 管理 UI 配置状态（cropConfig、useAiVisionMode），作为 UI 层与 data 层之间的状态源
  * 2. 通过 [TranslationRepository] 接口调用 data 层执行实际翻译
- * 3. 对外提供与旧 PluginManager 兼容的 API，便于 Service 层平滑迁移
+ * 3. 缓存最近一次翻译的调试数据供 UI 查询
  *
  * 架构定位（决策 A）：
  * - 属于 presentation 层，持有 domain 层接口引用，不直接依赖具体实现
- * - 状态管理在此层，业务逻辑在 data 层（TranslationRepository 实现）
- * - 单元测试可 mock TranslationRepository 验证 Controller 的状态管理逻辑
+ * - 配置状态在此层，业务逻辑在 data 层（TranslationRepository 实现）
+ * - 串行化下沉到 Repository 实现，Controller 不再持锁
  *
  * 线程安全：
  * - 跨线程可变状态使用 @Volatile 保证可见性
- * - translateImage 串行化由 Service 层的 serviceScope/Mutex 保证（阶段2 协程迁移后）
- * - 过渡期保留 synchronized 兼容旧调用方
+ * - translateImage 串行化由 Repository 实现保证
  */
 class TranslationController(private val repository: TranslationRepository) {
 
@@ -32,18 +31,16 @@ class TranslationController(private val repository: TranslationRepository) {
         private const val TAG = "TranslationController"
     }
 
-    // 跨线程可变状态：@Volatile 保证可见性，对象本身为不可变 data class
+    // UI 配置状态：@Volatile 保证可见性，对象本身为不可变 data class
     @Volatile
     private var cropConfig = ScreenCropConfig()
 
     @Volatile
-    private var lastDebugData = DebugOverlayData()
-
-    @Volatile
     private var useAiVisionMode = false
 
-    // 翻译串行化锁：过渡期保留，阶段2 协程迁移后替换为 Mutex
-    private val translateLock = Any()
+    // 最近一次翻译的调试数据缓存，供 UI 查询
+    @Volatile
+    private var lastDebugData = DebugOverlayData()
 
     /**
      * 初始化仓储依赖。
@@ -85,7 +82,7 @@ class TranslationController(private val repository: TranslationRepository) {
         lastTranslationRects: List<Rect> = emptyList(),
         verticalOnly: Boolean = false,
         isManual: Boolean = false,
-    ): List<TranslationCard> = synchronized(translateLock) {
+    ): List<TranslationCard> {
         val params = TranslationRepository.TranslateParams(
             bitmap = bitmap,
             cropConfig = cropConfig,
@@ -96,7 +93,7 @@ class TranslationController(private val repository: TranslationRepository) {
         )
         val result = repository.translate(params)
         lastDebugData = result.debugData
-        result.cards
+        return result.cards
     }
 
     /**

@@ -14,7 +14,6 @@ import com.manga.translator.util.AppLog
 import com.manga.translator.util.ComicImageCropper
 import com.manga.translator.util.OpenCVHelper
 import com.manga.translator.util.PerfTracker
-import com.manga.translator.util.ScreenCropConfig
 import com.manga.translator.util.TextFilter
 import kotlin.math.abs
 
@@ -52,18 +51,12 @@ class PluginManager(private val context: Context) : TranslationRepository {
     private val sentenceAssembler = SentenceAssembler()
 
     // 翻译串行化锁：ScreenCaptureService 的 isProcessing 在 8 秒超时强制重置后可能产生并发，
-    // 用此锁确保 translateImage 串行执行，防止内部状态（lastDebugData 等）竞态。
+    // 用此锁确保 translateImage 串行执行，防止内部状态竞态。
     // 阶段 2 协程迁移后将被 Mutex 替代。
     private val translateLock = Any()
 
-    // 跨线程访问的可变状态：@Volatile 保证可见性，对象本身为不可变 data class
+    // 跨线程访问的可变状态：@Volatile 保证可见性
     @Volatile private var isInitialized = false
-
-    @Volatile private var cropConfig = ScreenCropConfig()
-
-    @Volatile private var lastDebugData = DebugOverlayData()
-
-    @Volatile private var useAiVisionMode = false
 
     override fun initialize() = synchronized(translateLock) {
         if (isInitialized) return
@@ -79,29 +72,30 @@ class PluginManager(private val context: Context) : TranslationRepository {
     }
 
     /**
-     * 翻译图片入口。
+     * 翻译图片入口（内部实现）。
      *
      * Bitmap 生命周期契约：
      * - 此方法不回收传入的 bitmap，调用方负责回收
      * - 内部裁剪产生的 croppedBitmap 由本方法回收
      * - AI 路径的 base64 转换不持有 bitmap 引用
      *
-     * @param bitmap 待翻译的截图，调用方负责 recycle
-     * @param lastTranslationRects 上一帧翻译区域，用于去重过滤
-     * @param verticalOnly 是否强制竖向识别模式
-     * @param isManual 是否为手动翻译（影响 AI 路径选择）
-     * @return 翻译卡片列表
+     * @param params 翻译参数（含 cropConfig、useAiVisionMode 等配置）
+     * @return 翻译卡片列表与调试覆盖数据的 Pair
      */
     private fun translateImage(
-        bitmap: Bitmap,
-        lastTranslationRects: List<Rect> = emptyList(),
-        verticalOnly: Boolean = false,
-        isManual: Boolean = false,
-    ): List<TranslationCard> = synchronized(translateLock) {
+        params: TranslationRepository.TranslateParams,
+    ): Pair<List<TranslationCard>, DebugOverlayData> = synchronized(translateLock) {
         if (!isInitialized) {
             AppLog.e("PluginManager", "插件管理器未初始化")
-            return emptyList()
+            return emptyList<TranslationCard>() to DebugOverlayData()
         }
+
+        val bitmap = params.bitmap
+        val cropConfig = params.cropConfig
+        val useAiVisionMode = params.useAiVisionMode
+        val lastTranslationRects = params.lastTranslationRects
+        val verticalOnly = params.verticalOnly
+        val isManual = params.isManual
 
         val tracker = PerfTracker.start("PluginManager", "翻译图片")
         AppLog.d("PluginManager", "开始翻译图片: ${bitmap.width}x${bitmap.height}")
@@ -126,13 +120,13 @@ class PluginManager(private val context: Context) : TranslationRepository {
                         val cards = rawCards.map { card -> card.withOffset(cropRect.left, cropRect.top) }
                         AppLog.d("PluginManager", "AI多模态: ${cards.size} 个翻译结果")
                         // 用本次 AI 结果构建调试覆盖数据（裁剪坐标系，再统一应用偏移）
-                        lastDebugData = DebugOverlayData(
+                        val debugData = DebugOverlayData(
                             bubbles = emptyList(),
                             ocrBlocks = rawCards.map { it.sourceRect },
                             mappings = rawCards.map { it.sourceRect to it.sourceRect },
                             orderedBubbles = rawCards.map { it.sourceRect },
                         ).withOffset(cropRect.left, cropRect.top)
-                        return cards
+                        return cards to debugData
                     }
                 } catch (e: Exception) {
                     AppLog.e("PluginManager", "AI多模态失败，回退现有流程: ${e.message}")
@@ -176,10 +170,10 @@ class PluginManager(private val context: Context) : TranslationRepository {
                 bitmap = croppedBitmap,
             )
             tracker.end("翻译")
-            val result = translatedCropResult.map { card -> card.withOffset(cropRect.left, cropRect.top) }
-            lastDebugData = lastDebugData.withOffset(cropRect.left, cropRect.top)
+            val result = translatedCropResult.first.map { card -> card.withOffset(cropRect.left, cropRect.top) }
+            val debugData = translatedCropResult.second.withOffset(cropRect.left, cropRect.top)
 
-            return result
+            return result to debugData
         } finally {
             tracker.finish()
             // 统一在 finally 中回收 croppedBitmap，避免异常路径下资源泄漏
@@ -194,8 +188,8 @@ class PluginManager(private val context: Context) : TranslationRepository {
         bubbles: List<BubbleInfo>,
         ocrBlocks: List<OcrBlock>,
         bitmap: Bitmap,
-    ): List<TranslationCard> {
-        if (ocrBlocks.isEmpty()) return emptyList()
+    ): Pair<List<TranslationCard>, DebugOverlayData> {
+        if (ocrBlocks.isEmpty()) return emptyList<TranslationCard>() to DebugOverlayData()
 
         val debugBubbles = bubbles.map { it.rect }
         val debugOcrBlocks = ocrBlocks.map { it.rect }
@@ -216,7 +210,7 @@ class PluginManager(private val context: Context) : TranslationRepository {
 
         val regions = suppressOverlappingRegions(regionCandidates)
 
-        lastDebugData = DebugOverlayData(
+        val debugData = DebugOverlayData(
             bubbles = debugBubbles,
             ocrBlocks = debugOcrBlocks,
             mappings = debugMappings,
@@ -230,7 +224,7 @@ class PluginManager(private val context: Context) : TranslationRepository {
         )
 
         val translatedTexts = translationPlugin.translateBatch(limitedRegions.map { it.text })
-        return limitedRegions.mapIndexed { index, region ->
+        val cards = limitedRegions.mapIndexed { index, region ->
             TranslationCard(
                 originalText = region.text,
                 translatedText = translatedTexts.getOrNull(index).orEmpty(),
@@ -238,6 +232,7 @@ class PluginManager(private val context: Context) : TranslationRepository {
                 isVertical = region.isVertical,
             )
         }
+        return cards to debugData
     }
 
     private fun buildSentenceFirstRegions(
@@ -556,28 +551,16 @@ class PluginManager(private val context: Context) : TranslationRepository {
     /**
      * [TranslationRepository] 接口实现：基于参数执行翻译，返回卡片 + 调试数据。
      *
-     * 与 [translateImage] 的区别：
-     * - translateImage 依赖实例状态（cropConfig、useAiVisionMode、lastDebugData），供旧调用方使用
-     * - translate 从 params 读取配置，结果通过返回值透出，无状态副作用（除 lastDebugData 仍被更新以兼容旧调用方）
-     *
-     * 过渡期：translate 内部调用 translateImage 并读取更新后的 lastDebugData 作为返回。
+     * 无状态副作用：所有配置从 params 读取，结果通过返回值透出。
+     * 串行化由 translateImage 内部的 synchronized(translateLock) 保证。
      */
     override fun translate(
         params: TranslationRepository.TranslateParams,
-    ): TranslationRepository.TranslateResult = synchronized(translateLock) {
-        // 同步实例状态到 params 指定值，保证 translateImage 使用最新配置
-        cropConfig = params.cropConfig
-        useAiVisionMode = params.useAiVisionMode
-
-        val cards = translateImage(
-            bitmap = params.bitmap,
-            lastTranslationRects = params.lastTranslationRects,
-            verticalOnly = params.verticalOnly,
-            isManual = params.isManual,
-        )
-        TranslationRepository.TranslateResult(
+    ): TranslationRepository.TranslateResult {
+        val (cards, debugData) = translateImage(params)
+        return TranslationRepository.TranslateResult(
             cards = cards,
-            debugData = lastDebugData,
+            debugData = debugData,
         )
     }
 }
